@@ -49,13 +49,14 @@ export class SessionManager {
         message: status.message ?? '',
         fail: status.fail,
       };
-    } catch {
+    } catch (err) {
       this.authenticated = false;
+      const detail = err instanceof Error ? err.message : String(err);
       return {
         authenticated: false,
         competing: false,
         connected: false,
-        message: 'Failed to check auth status',
+        message: `Failed to connect to IB Gateway: ${detail}`,
       };
     }
   }
@@ -75,8 +76,9 @@ export class SessionManager {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const status = await this.checkAuthStatus();
       return status.authenticated;
-    } catch {
-      return false;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Re-authentication failed: ${detail}`);
     }
   }
 

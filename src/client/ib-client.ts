@@ -28,18 +28,27 @@ interface HttpResponse {
 
 export class IBClient {
   private baseUrl: string;
-  private sslVerify: boolean;
   private rateLimiter: RateLimiter;
   private timeoutMs: number;
   private cachedAccountId: string | undefined;
   private onUnauthorized: (() => Promise<boolean>) | undefined;
+  private httpsAgent: https.Agent | undefined;
 
   constructor(config: Config, rateLimiter: RateLimiter) {
     this.baseUrl = `${config.gatewayUrl}${config.apiBase}`;
-    this.sslVerify = config.sslVerify;
     this.rateLimiter = rateLimiter;
     this.timeoutMs = config.requestTimeoutMs;
     this.cachedAccountId = config.defaultAccountId;
+
+    // Create a persistent HTTPS agent with TLS settings.
+    // IB Gateway uses a self-signed certificate — rejectUnauthorized must be
+    // set on an Agent for reliable behavior across Node.js versions.
+    if (config.gatewayUrl.startsWith('https')) {
+      this.httpsAgent = new https.Agent({
+        rejectUnauthorized: config.sslVerify,
+        keepAlive: true,
+      });
+    }
   }
 
   setOnUnauthorized(handler: () => Promise<boolean>): void {
@@ -106,7 +115,7 @@ export class IBClient {
         path: `${url.pathname}${url.search}`,
         timeout: this.timeoutMs,
         headers: {},
-        ...(isHttps ? { rejectUnauthorized: this.sslVerify } : {}),
+        ...(isHttps && this.httpsAgent ? { agent: this.httpsAgent } : {}),
       };
 
       if (bodyStr) {
@@ -124,7 +133,11 @@ export class IBClient {
         });
       });
 
-      req.on('error', reject);
+      req.on('error', (err: NodeJS.ErrnoException) => {
+        const code = err.code || 'UNKNOWN';
+        const detail = `${method} ${url.href} failed: ${code} — ${err.message}`;
+        reject(new Error(detail));
+      });
       req.on('timeout', () => {
         req.destroy();
         reject(new Error(`Request timeout after ${this.timeoutMs}ms: ${method} ${url.pathname}`));
