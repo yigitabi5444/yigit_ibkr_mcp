@@ -1,55 +1,54 @@
 import { describe, it, expect, vi } from 'vitest';
-import optionChainFixture from '../fixtures/option-chain.json';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createMockConnection } from '../helpers/mock-connection.js';
+import { getToolHandler } from '../helpers/get-tool-handler.js';
+import { registerOptionsTools } from '../../../src/tools/options.js';
 
-describe('Options tools logic', () => {
-  it('option chain has both calls and puts', () => {
-    expect(optionChainFixture.strikes.call).toHaveLength(5);
-    expect(optionChainFixture.strikes.put).toHaveLength(5);
-  });
+describe('Options Tools', () => {
+  it('get_option_chain returns expirations and strikes', async () => {
+    const { conn, mockApi } = createMockConnection();
 
-  it('secdef info entries have required fields', () => {
-    for (const contract of optionChainFixture.secdef_info) {
-      expect(contract).toHaveProperty('conid');
-      expect(contract).toHaveProperty('strike');
-      expect(contract).toHaveProperty('right');
-      expect(contract).toHaveProperty('month');
-      expect(['C', 'P']).toContain(contract.right);
-    }
-  });
-
-  it('composite chain orchestrates calls in correct order', async () => {
-    const callOrder: string[] = [];
-
-    const mockGet = vi.fn().mockImplementation((path: string) => {
-      if (path.includes('/iserver/secdef/strikes')) {
-        callOrder.push('strikes');
-        return Promise.resolve(optionChainFixture.strikes);
-      }
-      if (path.includes('/iserver/secdef/info')) {
-        callOrder.push('secdef_info');
-        return Promise.resolve([optionChainFixture.secdef_info[0]]);
-      }
-      return Promise.resolve({});
-    });
-
-    // Simulate the composite tool logic
-    const strikes = await mockGet('/iserver/secdef/strikes?conid=265598&sectype=OPT');
-
-    const allStrikes = new Set([
-      ...(strikes.call || []),
-      ...(strikes.put || []),
+    mockApi.getSecDefOptParams.mockResolvedValue([
+      {
+        exchange: 'SMART',
+        underlyingConId: 265598,
+        tradingClass: 'AAPL',
+        multiplier: 100,
+        expirations: ['20250321', '20250418', '20250516'],
+        strikes: [170, 175, 180, 185, 190],
+      },
     ]);
 
-    for (const right of ['C', 'P']) {
-      for (const strike of allStrikes) {
-        await mockGet(`/iserver/secdef/info?conid=265598&sectype=OPT&strike=${strike}&right=${right}`);
-      }
-    }
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerOptionsTools(server, conn);
 
-    expect(callOrder[0]).toBe('strikes');
-    // All subsequent calls should be secdef_info
-    expect(callOrder.slice(1).every((c) => c === 'secdef_info')).toBe(true);
-    // 5 strikes * 2 (C+P) = 10 secdef_info calls
-    expect(callOrder.filter((c) => c === 'secdef_info')).toHaveLength(10);
+    const handler = getToolHandler(server, 'get_option_chain');
+
+    const result = await handler({ symbol: 'AAPL', conid: 265598 });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.underlying).toBe('AAPL');
+    expect(data.chains).toHaveLength(1);
+    expect(data.chains[0].expirations).toHaveLength(3);
+    expect(data.chains[0].strikes).toEqual([170, 175, 180, 185, 190]);
+    expect(data.chains[0].multiplier).toBe(100);
+  });
+
+  it('get_option_chain filters by exchange', async () => {
+    const { conn, mockApi } = createMockConnection();
+
+    mockApi.getSecDefOptParams.mockResolvedValue([
+      { exchange: 'SMART', underlyingConId: 265598, tradingClass: 'AAPL', multiplier: 100, expirations: ['20250321'], strikes: [180] },
+      { exchange: 'CBOE', underlyingConId: 265598, tradingClass: 'AAPL', multiplier: 100, expirations: ['20250321'], strikes: [180] },
+    ]);
+
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerOptionsTools(server, conn);
+
+    const handler = getToolHandler(server, 'get_option_chain');
+
+    const result = await handler({ symbol: 'AAPL', conid: 265598, exchange: 'SMART' });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.chains).toHaveLength(1);
+    expect(data.chains[0].exchange).toBe('SMART');
   });
 });

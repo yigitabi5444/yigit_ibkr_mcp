@@ -1,73 +1,79 @@
 import { describe, it, expect, vi } from 'vitest';
-import snapshotFixture from '../fixtures/snapshot.json';
-import snapshotEmptyFixture from '../fixtures/snapshot-empty.json';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createMockConnection } from '../helpers/mock-connection.js';
+import { getToolHandler } from '../helpers/get-tool-handler.js';
+import { registerMarketDataTools } from '../../../src/tools/market-data.js';
 
-describe('Market data tools logic', () => {
-  it('detects warmup (empty) snapshot and retries', async () => {
-    const mockGet = vi.fn()
-      .mockResolvedValueOnce(snapshotEmptyFixture) // First call: empty
-      .mockResolvedValueOnce(snapshotFixture);      // Second call: data
+describe('Market Data Tools', () => {
+  it('get_market_snapshot returns tick data', async () => {
+    const { conn, mockApi } = createMockConnection();
 
-    // Simulate the warmup retry logic
-    let data = await mockGet('/iserver/marketdata/snapshot');
+    mockApi.getMarketDataSnapshot.mockResolvedValue([
+      { tickType: 4, value: 178.52 },  // Last
+      { tickType: 1, value: 178.50 },  // Bid
+      { tickType: 2, value: 178.54 },  // Ask
+      { tickType: 8, value: 52431200 }, // Volume
+    ]);
 
-    if (Array.isArray(data) && data.length > 0) {
-      const firstItem = data[0] as Record<string, unknown>;
-      const hasData = Object.keys(firstItem).some(
-        (k) => k !== 'conid' && k !== 'conidEx' && k !== 'server_id' && firstItem[k] !== '',
-      );
-      if (!hasData) {
-        data = await mockGet('/iserver/marketdata/snapshot');
-      }
-    }
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerMarketDataTools(server, conn);
 
-    expect(mockGet).toHaveBeenCalledTimes(2);
-    expect(data).toEqual(snapshotFixture);
+    const handler = getToolHandler(server, 'get_market_snapshot');
+
+    const result = await handler({ conids: [265598] });
+    const data = JSON.parse(result.content[0].text);
+    expect(data).toHaveLength(1);
+    expect(data[0].conId).toBe(265598);
+    expect(data[0].tick_4).toBe(178.52);
   });
 
-  it('does not retry when snapshot has data', async () => {
-    const mockGet = vi.fn().mockResolvedValueOnce(snapshotFixture);
+  it('get_price_history returns bars', async () => {
+    const { conn, mockApi } = createMockConnection();
 
-    let data = await mockGet('/iserver/marketdata/snapshot');
+    mockApi.getHistoricalData.mockResolvedValue([
+      { time: '1700000000', open: 175.0, high: 178.5, low: 174.5, close: 178.0, volume: 50000 },
+      { time: '1700086400', open: 178.0, high: 180.0, low: 177.0, close: 179.5, volume: 45000 },
+    ]);
 
-    if (Array.isArray(data) && data.length > 0) {
-      const firstItem = data[0] as Record<string, unknown>;
-      const hasData = Object.keys(firstItem).some(
-        (k) => k !== 'conid' && k !== 'conidEx' && k !== 'server_id' && firstItem[k] !== '',
-      );
-      if (!hasData) {
-        data = await mockGet('/iserver/marketdata/snapshot');
-      }
-    }
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerMarketDataTools(server, conn);
 
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    const handler = getToolHandler(server, 'get_price_history');
+
+    const result = await handler({ conid: 265598, period: '1m', bar: '1d' });
+    const data = JSON.parse(result.content[0].text);
+    expect(data).toHaveLength(2);
+    expect(data[0].close).toBe(178.0);
   });
 
-  it('snapshot contains fundamental data fields', () => {
-    const snapshot = snapshotFixture[0];
+  it('get_price_history rejects invalid bar size', async () => {
+    const { conn } = createMockConnection();
 
-    // Fundamentals
-    expect(snapshot['7290']).toBeDefined(); // P/E
-    expect(snapshot['7291']).toBeDefined(); // EPS
-    expect(snapshot['7287']).toBeDefined(); // Div Yield
-    expect(snapshot['7289']).toBeDefined(); // Market Cap
-    expect(snapshot['7293']).toBeDefined(); // 52wk High
-    expect(snapshot['7294']).toBeDefined(); // 52wk Low
-    expect(snapshot['7633']).toBeDefined(); // IV
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerMarketDataTools(server, conn);
 
-    // Price data
-    expect(snapshot['31']).toBeDefined();   // Last
-    expect(snapshot['84']).toBeDefined();   // Bid
-    expect(snapshot['86']).toBeDefined();   // Ask
-    expect(snapshot['87']).toBeDefined();   // Volume
+    const handler = getToolHandler(server, 'get_price_history');
+
+    const result = await handler({ conid: 265598, period: '1m', bar: 'invalid' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Invalid bar size');
   });
 
-  it('snapshot contains P&L fields', () => {
-    const snapshot = snapshotFixture[0];
+  it('get_exchange_rate returns FX data', async () => {
+    const { conn, mockApi } = createMockConnection();
 
-    expect(snapshot['72']).toBeDefined();  // Position
-    expect(snapshot['73']).toBeDefined();  // Market Value
-    expect(snapshot['75']).toBeDefined();  // Unrealized P&L
-    expect(snapshot['78']).toBeDefined();  // Daily P&L
+    mockApi.getMarketDataSnapshot.mockResolvedValue([
+      { tickType: 1, value: 1.0821 },
+      { tickType: 2, value: 1.0823 },
+    ]);
+
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerMarketDataTools(server, conn);
+
+    const handler = getToolHandler(server, 'get_exchange_rate');
+
+    const result = await handler({ source: 'EUR', target: 'USD' });
+    const data = JSON.parse(result.content[0].text);
+    expect(data.pair).toBe('EUR/USD');
   });
 });

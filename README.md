@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A Model Context Protocol (MCP) server that gives AI assistants real-time access to your Interactive Brokers portfolio, market data, and trading analytics.
+  A Model Context Protocol (MCP) server that connects AI assistants to your Interactive Brokers account via the native TWS socket API.
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 
 ## What is this?
 
-**ibkr-mcp** connects Claude (or any MCP-compatible AI) directly to your Interactive Brokers account through the IB Gateway Client Portal API. Ask questions about your portfolio in natural language and get real answers from real data.
+**ibkr-mcp** connects Claude (or any MCP-compatible AI) directly to your Interactive Brokers account through the **TWS socket API** (the same protocol used by IB's official Java/Python/C++ clients). No REST gateway needed — just IB Gateway or TWS running on its default port.
 
 ```
 You: "What's my portfolio P&L today?"
@@ -31,33 +31,32 @@ Claude: Your account U1234567 is up $1,247.30 today.
 ```
 
 ```
-You: "Show me AAPL's option chain for next month, focus on strikes near the money"
+You: "Show me AAPL's option chain for next month"
 
-Claude: Here's the AAPL option chain for APR25:
-        Current price: $178.52 | IV: 28.4%
+Claude: Here's the AAPL option chain from SMART exchange:
+        Multiplier: 100 | Expirations: 12 available
 
-        Strike  Call Bid/Ask    Put Bid/Ask
-        175     $5.20/$5.40     $1.65/$1.80
-        177.5   $3.80/$4.00     $2.75/$2.90
-        180     $2.60/$2.75     $4.05/$4.20
-        182.5   $1.55/$1.70     $5.50/$5.65
+        Nearest expiration: 20250418
+        Strikes: 155, 160, 165, 170, 175, 180, 185, 190, 195, 200...
+        (47 strikes total)
 ```
 
 ## Features
 
-- **26 read-only tools** covering every aspect of your IB account
-- **Deep market data** with fundamentals (P/E, EPS, dividend yield, market cap, 52-week range, IV)
-- **Full option chains** with strike prices and contract details in a single call
-- **Per-position P&L** including unrealized gains, daily changes, and cost basis
-- **Auto-session management** — keeps your IB Gateway session alive automatically
-- **Rate limiting** built-in so you never hit IB's API limits
-- **Self-signed cert handling** — works with IB Gateway's default SSL setup
+- **24 read-only tools** — portfolio, market data, options, orders, news, scanner
+- **Native TWS socket API** via [@stoqey/ib](https://github.com/stoqey/ib) — no REST gateway required
+- **Real-time streaming data** — account summary, positions, P&L all via live subscriptions
+- **Full option chains** — expirations, strikes, multiplier via `getSecDefOptParams` (fast, no throttling)
+- **Historical data** — OHLCV bars from 1-minute to monthly, up to 5 years
+- **News** — headlines and full articles from subscribed providers
+- **Market scanner** — top gainers, most active, high dividend, and more
+- **Auto-reconnect** — persistent socket connection with automatic reconnection
 
 ## Quick Start
 
 ### Prerequisites
 
-- [IB Gateway](https://www.interactivebrokers.com/en/trading/ibgateway-stable.php) running and authenticated
+- [IB Gateway](https://www.interactivebrokers.com/en/trading/ibgateway-stable.php) or TWS running and authenticated
 - Node.js 18+
 
 ### Install & Build
@@ -83,7 +82,8 @@ Add this to your `claude_desktop_config.json`:
       "command": "node",
       "args": ["/path/to/yigit_ibkr_mcp/dist/index.js"],
       "env": {
-        "IBKR_GATEWAY_URL": "https://localhost:4001"
+        "IBKR_HOST": "127.0.0.1",
+        "IBKR_PORT": "4001"
       }
     }
   }
@@ -92,118 +92,141 @@ Add this to your `claude_desktop_config.json`:
 
 Restart Claude Desktop. You should see the IBKR tools available.
 
+### Port Reference
+
+| Platform | Live | Paper |
+|----------|------|-------|
+| IB Gateway | 4001 | 4002 |
+| TWS | 7496 | 7497 |
+
 ## Tools
 
 ### Account & Portfolio
 | Tool | Description |
 |------|-------------|
 | `get_accounts` | List all brokerage accounts |
-| `get_account_summary` | Balances, margin, buying power, net liquidation, cash by currency |
-| `get_account_allocation` | Asset class breakdown (stocks, options, futures, cash %) |
-| `get_positions` | All open positions with unrealized P&L, daily P&L. Auto-paginates. Includes option positions with strike/right/expiry |
+| `get_account_summary` | Balances, margin, buying power, net liquidation, cash breakdown |
+| `get_positions` | All open positions with P&L. Options include strike/right/expiry/multiplier |
 | `get_position_by_conid` | Single position detail by contract ID |
 
-### P&L & Performance
+### P&L
 | Tool | Description |
 |------|-------------|
-| `get_pnl` | Account-level daily P&L, unrealized P&L, net liquidity |
-| `get_performance` | Historical NAV and time-weighted returns |
-| `get_transaction_history` | Transaction log with filters |
+| `get_pnl` | Real-time account-level daily P&L, unrealized P&L, realized P&L |
 
-### Market Data (Deep)
+### Market Data
 | Tool | Description |
 |------|-------------|
-| `get_market_snapshot` | Real-time quote + **P/E, EPS, dividend yield, market cap, 52-week high/low, IV** — all in one call |
+| `get_market_snapshot` | Real-time quote with fundamentals (P/E, EPS, div yield, market cap, 52wk, IV) |
 | `get_price_history` | Historical OHLCV bars (1min to monthly, up to 5 years) |
+| `get_exchange_rate` | FX rates via IDEALPRO |
 
 ### Options
 | Tool | Description |
 |------|-------------|
-| `get_option_chain` | Full option chain — fetches expirations, strikes, and contract IDs in one composite call |
-| `get_option_strikes` | Strike prices for a specific expiration |
+| `get_option_chain` | Full chain — expirations, strikes, multiplier, exchange. Fast (no throttling). |
+| `get_option_strikes` | Strike prices filtered by expiration and exchange |
 
 ### Contracts
 | Tool | Description |
 |------|-------------|
 | `search_contracts` | Search by symbol or company name |
-| `get_contract_details` | Full contract specifications |
-| `get_contract_rules` | Trading rules, order types, increments |
-| `get_stock_contracts` | Stock contracts across exchanges |
-| `get_futures_contracts` | Futures contracts by underlying |
+| `get_contract_details` | Full specs: trading hours, min tick, valid exchanges, order types |
+| `get_stock_contracts` | Stock contracts across all exchanges |
+| `get_futures_contracts` | Non-expired futures by underlying |
 
 ### Scanner
 | Tool | Description |
 |------|-------------|
-| `get_scanner_params` | Available scanner types and filters |
-| `run_scanner` | Run market scanner (top gainers, most active, etc.) |
+| `get_scanner_params` | Available scanner types and filters (cached 15min) |
+| `run_scanner` | Run market scanner (top gainers, most active, high dividend, etc.) |
 
 ### Orders & Trades (Read-Only)
 | Tool | Description |
 |------|-------------|
-| `get_live_orders` | Currently working orders |
-| `get_order_status` | Single order status |
-| `get_trades` | Execution history (7 days) |
+| `get_live_orders` | All currently working orders |
+| `get_order_status` | Single order status by ID |
+| `get_trades` | Execution history for current session |
 
-### Other
+### News
 | Tool | Description |
 |------|-------------|
-| `get_watchlists` / `get_watchlist` | Saved watchlists |
-| `get_exchange_rate` | FX rates |
-| `get_auth_status` / `reauthenticate` / `ping_session` | Session management |
+| `get_news_providers` | List subscribed news sources |
+| `get_news_headlines` | Historical headlines by contract ID |
+| `get_news_article` | Full article text by article ID |
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `IBKR_GATEWAY_URL` | `https://localhost:4001` | IB Gateway address |
+| `IBKR_HOST` | `127.0.0.1` | IB Gateway/TWS host |
+| `IBKR_PORT` | `4001` | Socket API port |
+| `IBKR_CLIENT_ID` | `0` | API client ID (0-32) |
 | `IBKR_ACCOUNT_ID` | *(auto-detected)* | Default account ID |
-| `IBKR_SSL_VERIFY` | `false` | SSL certificate verification |
+| `IBKR_MARKET_DATA_TYPE` | `3` | 1=live, 2=frozen, 3=delayed, 4=delayed-frozen |
 | `IBKR_TIMEOUT_MS` | `15000` | Request timeout in ms |
 
 ## Examples
 
 Ask Claude things like:
 
-- *"What's my current portfolio allocation?"*
+- *"What's my current portfolio and P&L?"*
 - *"Show me my P&L for today"*
 - *"Look up NVDA and give me the full quote with fundamentals"*
 - *"What are my option positions?"*
-- *"Get the TSLA option chain for next month"*
+- *"Get the AAPL option chain — what strikes are available?"*
 - *"Show me the most active stocks right now"*
-- *"What trades did I make this week?"*
+- *"What trades did I execute today?"*
 - *"What's the EUR/USD exchange rate?"*
+- *"Get me the latest news headlines for AAPL"*
 
 ## Architecture
 
 ```
-┌─────────────────┐     stdio      ┌──────────────────┐     HTTPS     ┌─────────────┐
-│  Claude Desktop  │ ◄────────────► │    ibkr-mcp      │ ◄───────────► │ IB Gateway  │
-│  (MCP Client)    │                │                  │               │ (port 4001) │
-└─────────────────┘                │  ┌────────────┐  │               └─────────────┘
-                                    │  │ 26 Tools   │  │
-                                    │  ├────────────┤  │
-                                    │  │ Rate       │  │
-                                    │  │ Limiter    │  │
-                                    │  ├────────────┤  │
-                                    │  │ Session    │  │
-                                    │  │ Manager    │  │
-                                    │  │ (auto-     │  │
-                                    │  │  tickle)   │  │
-                                    │  └────────────┘  │
-                                    └──────────────────┘
+┌─────────────────┐     stdio      ┌──────────────────────────────────┐
+│  Claude Desktop  │ ◄────────────► │         ibkr-mcp                 │
+│  (MCP Client)    │                │                                  │
+└─────────────────┘                │  ┌────────────────────────────┐  │
+                                    │  │  IBConnection (singleton)   │  │
+                                    │  │  ┌────────────────────────┐│  │
+                                    │  │  │ IBApiNext (@stoqey/ib) ││  │    TCP socket
+                                    │  │  │  - Promises (one-shot) ││  │ ◄────────────►
+                                    │  │  │  - Observables (stream)││  │
+                                    │  │  │  - Auto-reconnect      ││  │
+                                    │  │  └────────────────────────┘│  │
+                                    │  │  ┌────────────────────────┐│  │   IB Gateway
+                                    │  │  │ IBApi (low-level)      ││  │   port 4001
+                                    │  │  │  - News events         ││  │
+                                    │  │  └────────────────────────┘│  │
+                                    │  └────────────────────────────┘  │
+                                    │                                  │
+                                    │  24 Read-Only MCP Tools          │
+                                    └──────────────────────────────────┘
 ```
 
-- **Session Manager** auto-tickles every 55s to prevent timeout, handles re-auth on 401
-- **Rate Limiter** per-endpoint sliding window — waits instead of erroring
-- **Self-signed certs** handled natively via Node.js `https` module
+**Key design**: The TWS API is event-driven (pub/sub over TCP socket), but MCP tools are request/response. `IBConnection` bridges this with `subscribeFirst()` — subscribe to a streaming Observable, take the first emission, auto-unsubscribe.
 
 ## Development
 
 ```bash
 npm run dev          # Run with tsx (hot reload)
-npm test             # Unit tests (33 tests, no gateway needed)
+npm test             # Unit tests (19 tests, mocked, no gateway needed)
 npm run test:integration  # Integration tests (requires live IB Gateway)
 ```
+
+### Running Integration Tests
+
+```bash
+IBKR_HOST=127.0.0.1 IBKR_PORT=4001 npm run test:integration
+```
+
+## Tech Stack
+
+- **[@stoqey/ib](https://github.com/stoqey/ib)** — TypeScript port of the official IB Java client (TWS API v10.32)
+- **[RxJS](https://rxjs.dev/)** — Observable-to-Promise bridge for streaming data
+- **[@modelcontextprotocol/sdk](https://modelcontextprotocol.io)** — MCP server framework
+- **[Zod](https://zod.dev/)** — Input validation
+- **[Vitest](https://vitest.dev/)** — Testing
 
 ## License
 

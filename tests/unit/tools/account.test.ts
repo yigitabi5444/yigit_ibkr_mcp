@@ -1,44 +1,50 @@
 import { describe, it, expect, vi } from 'vitest';
-import accountsFixture from '../fixtures/accounts.json';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { of } from 'rxjs';
+import { createMockConnection } from '../helpers/mock-connection.js';
+import { getToolHandler } from '../helpers/get-tool-handler.js';
+import { registerAccountTools } from '../../../src/tools/account.js';
 
-describe('Account tools logic', () => {
-  it('merges summary and ledger into single response', async () => {
-    const mockSummary = {
-      accountready: { amount: 0, currency: null, isNull: false },
-      totalcashvalue: { amount: 50000, currency: 'USD', isNull: false },
-      netliquidation: { amount: 125000, currency: 'USD', isNull: false },
-      maintmarginreq: { amount: 25000, currency: 'USD', isNull: false },
-    };
-    const mockLedger = {
-      USD: { cashbalance: 50000, settledcash: 48000, exchangerate: 1 },
-      BASE: { cashbalance: 50000, settledcash: 48000, exchangerate: 1 },
-    };
+describe('Account Tools', () => {
+  it('get_accounts returns managed accounts', async () => {
+    const { conn, mockApi } = createMockConnection();
+    mockApi.getManagedAccounts.mockResolvedValue(['U1234567', 'U7654321']);
 
-    const mockGet = vi.fn()
-      .mockResolvedValueOnce(mockSummary)
-      .mockResolvedValueOnce(mockLedger);
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerAccountTools(server, conn);
 
-    const [summary, ledger] = await Promise.all([
-      mockGet('/portfolio/U1234567/summary'),
-      mockGet('/portfolio/U1234567/ledger'),
-    ]);
+    const handler = getToolHandler(server, 'get_accounts');
 
-    const merged = { summary, ledger };
-    expect(merged.summary).toEqual(mockSummary);
-    expect(merged.ledger).toEqual(mockLedger);
-    expect(merged.summary.netliquidation.amount).toBe(125000);
-    expect(merged.ledger.USD.cashbalance).toBe(50000);
+    const result = await handler({});
+    const data = JSON.parse(result.content[0].text);
+    expect(data.accounts).toEqual(['U1234567', 'U7654321']);
   });
 
-  it('uses default account when accountId not provided', async () => {
-    const mockGetDefaultAccountId = vi.fn().mockResolvedValue('U1234567');
+  it('get_account_summary returns account data', async () => {
+    const { conn } = createMockConnection();
 
-    const id = await mockGetDefaultAccountId();
-    expect(id).toBe('U1234567');
-  });
+    // Mock the subscribeFirst to return account summary data
+    const summaryData = {
+      all: new Map([
+        ['U1234567', new Map([
+          ['NetLiquidation', new Map([['USD', { value: '100000', ingressTm: 0 }]])],
+          ['TotalCashValue', new Map([['USD', { value: '50000', ingressTm: 0 }]])],
+          ['BuyingPower', new Map([['USD', { value: '200000', ingressTm: 0 }]])],
+        ])],
+      ]),
+    };
 
-  it('accounts fixture has expected structure', () => {
-    expect(accountsFixture.accounts).toContain('U1234567');
-    expect(accountsFixture.selectedAccount).toBe('U1234567');
+    (conn.subscribeFirst as ReturnType<typeof vi.fn>).mockResolvedValue(summaryData);
+
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerAccountTools(server, conn);
+
+    const handler = getToolHandler(server, 'get_account_summary');
+
+    const result = await handler({});
+    const data = JSON.parse(result.content[0].text);
+    expect(data.accountId).toBe('U1234567');
+    expect(data.NetLiquidation).toBe('100000');
+    expect(data.TotalCashValue).toBe('50000');
   });
 });

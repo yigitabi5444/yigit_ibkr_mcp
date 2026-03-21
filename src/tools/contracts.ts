@@ -1,25 +1,34 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { IBClient } from '../client/ib-client.js';
+import { IBConnection } from '../connection.js';
+import { Contract, SecType, Stock } from '@stoqey/ib';
 
-export function registerContractTools(server: McpServer, client: IBClient): void {
+export function registerContractTools(server: McpServer, conn: IBConnection): void {
   server.registerTool('search_contracts', {
     title: 'Search Contracts',
-    description: 'Search for securities by symbol or company name. Returns contract IDs (conids), symbol, exchange, security type, and description. Use the returned conid with other tools like get_market_snapshot, get_option_chain, etc.',
+    description: 'Search for securities by symbol or company name. Returns contract IDs (conids), symbol, exchange, security type, and description. Use the returned conid with other tools.',
     inputSchema: {
       symbol: z.string().describe('Symbol or company name to search for'),
-      secType: z.enum(['STK', 'OPT', 'FUT', 'CASH', 'IND', 'CFD', 'WAR', 'BOND', 'FUND', 'CMDTY']).optional().describe('Security type filter'),
-      isName: z.boolean().optional().describe('Set to true to search by company name instead of symbol'),
+      secType: z.string().optional().describe('Security type filter (STK, OPT, FUT, CASH, IND, etc.)'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ symbol, secType, isName }) => {
+  }, async ({ symbol, secType }) => {
     try {
-      const body: Record<string, unknown> = { symbol };
-      if (secType) body.secType = secType;
-      if (isName) body.name = true;
+      const results = await conn.ib.getMatchingSymbols(symbol);
+      let contracts = results.map((r) => ({
+        conId: r.contract?.conId,
+        symbol: r.contract?.symbol,
+        secType: r.contract?.secType,
+        exchange: r.contract?.primaryExch || r.contract?.exchange,
+        currency: r.contract?.currency,
+        derivativeSecTypes: r.derivativeSecTypes,
+      }));
 
-      const data = await client.post('/iserver/secdef/search', body);
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      if (secType) {
+        contracts = contracts.filter((c) => c.secType === secType);
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(contracts, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
@@ -27,31 +36,40 @@ export function registerContractTools(server: McpServer, client: IBClient): void
 
   server.registerTool('get_contract_details', {
     title: 'Get Contract Details',
-    description: 'Get full contract details for a known contract ID (conid). Returns exchange, currency, trading hours, min tick size, and other contract specifications.',
+    description: 'Get full contract details for a known contract ID (conid). Returns exchange, currency, trading hours, min tick size, order types, and other contract specifications.',
     inputSchema: {
       conid: z.number().describe('Contract ID'),
     },
     annotations: { readOnlyHint: true },
   }, async ({ conid }) => {
     try {
-      const data = await client.get(`/iserver/contract/${conid}/info`);
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
-    }
-  });
+      const contract: Contract = { conId: conid } as Contract;
+      const details = await conn.ib.getContractDetails(contract);
 
-  server.registerTool('get_contract_rules', {
-    title: 'Get Contract Rules',
-    description: 'Get contract info and trading rules including supported order types, increment rules, and trading permissions.',
-    inputSchema: {
-      conid: z.number().describe('Contract ID'),
-    },
-    annotations: { readOnlyHint: true },
-  }, async ({ conid }) => {
-    try {
-      const data = await client.get(`/iserver/contract/${conid}/info-and-rules`);
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      const result = details.map((d) => ({
+        conId: d.contract?.conId,
+        symbol: d.contract?.symbol,
+        secType: d.contract?.secType,
+        exchange: d.contract?.exchange,
+        primaryExch: d.contract?.primaryExch,
+        currency: d.contract?.currency,
+        localSymbol: d.contract?.localSymbol,
+        longName: d.longName,
+        category: d.category,
+        subcategory: d.subcategory,
+        minTick: d.minTick,
+        priceMagnifier: d.priceMagnifier,
+        tradingHours: d.tradingHours,
+        liquidHours: d.liquidHours,
+        validExchanges: d.validExchanges,
+        orderTypes: d.orderTypes,
+        marketName: d.marketName,
+        contractMonth: d.contractMonth,
+        industry: d.industry,
+        stockType: d.stockType,
+      }));
+
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
@@ -66,8 +84,21 @@ export function registerContractTools(server: McpServer, client: IBClient): void
     annotations: { readOnlyHint: true },
   }, async ({ symbols }) => {
     try {
-      const data = await client.get('/trsrv/stocks', { symbols: symbols.join(',') });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      const result: Record<string, unknown[]> = {};
+
+      for (const sym of symbols) {
+        const contract = new Stock(sym);
+        const details = await conn.ib.getContractDetails(contract);
+        result[sym] = details.map((d) => ({
+          conId: d.contract?.conId,
+          exchange: d.contract?.exchange,
+          primaryExch: d.contract?.primaryExch,
+          currency: d.contract?.currency,
+          longName: d.longName,
+        }));
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
@@ -82,8 +113,27 @@ export function registerContractTools(server: McpServer, client: IBClient): void
     annotations: { readOnlyHint: true },
   }, async ({ symbols }) => {
     try {
-      const data = await client.get('/trsrv/futures', { symbols: symbols.join(',') });
-      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+      const result: Record<string, unknown[]> = {};
+
+      for (const sym of symbols) {
+        const contract: Contract = {
+          symbol: sym,
+          secType: SecType.FUT,
+        } as Contract;
+        const details = await conn.ib.getContractDetails(contract);
+        result[sym] = details.map((d) => ({
+          conId: d.contract?.conId,
+          symbol: d.contract?.symbol,
+          localSymbol: d.contract?.localSymbol,
+          exchange: d.contract?.exchange,
+          currency: d.contract?.currency,
+          lastTradeDateOrContractMonth: d.contract?.lastTradeDateOrContractMonth,
+          multiplier: d.contract?.multiplier,
+          longName: d.longName,
+        }));
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
