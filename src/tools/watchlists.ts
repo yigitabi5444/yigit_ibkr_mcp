@@ -1,0 +1,34 @@
+import { z } from 'zod';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { IBClient } from '../client/ib-client.js';
+
+export function registerWatchlistTools(server: McpServer, client: IBClient): void {
+  server.registerTool('get_watchlists', {
+    title: 'Get Watchlists',
+    description: 'List all saved watchlists with their IDs and names.',
+    annotations: { readOnlyHint: true },
+  }, async () => {
+    try {
+      const data = await client.get('/iserver/account/watchlists');
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
+    }
+  });
+
+  server.registerTool('get_watchlist', {
+    title: 'Get Watchlist',
+    description: 'Get contracts in a specific watchlist by watchlist ID.',
+    inputSchema: {
+      watchlistId: z.string().describe('Watchlist ID'),
+    },
+    annotations: { readOnlyHint: true },
+  }, async ({ watchlistId }) => {
+    try {
+      const data = await client.get(`/iserver/account/watchlist/${watchlistId}`);
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
+    }
+  });
+}

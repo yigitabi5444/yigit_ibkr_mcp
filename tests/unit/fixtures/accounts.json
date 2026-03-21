@@ -1,0 +1,15 @@
+{
+  "accounts": ["U1234567"],
+  "acctProps": {
+    "U1234567": {
+      "hasChildAccounts": false,
+      "supportsCashQty": true,
+      "noClientTrading": false,
+      "supportsFractions": true
+    }
+  },
+  "aliases": {
+    "U1234567": "My Account"
+  },
+  "selectedAccount": "U1234567"
+}
