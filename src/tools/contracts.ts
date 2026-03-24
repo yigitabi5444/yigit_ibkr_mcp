@@ -33,7 +33,25 @@ export function registerContractTools(server: McpServer, client: IBClient): void
     annotations: { readOnlyHint: true },
   }, async ({ conid }) => {
     try {
-      const data = await client.get(`/iserver/contract/${conid}/info`);
+      const raw = await client.get<Record<string, unknown>>(`/iserver/contract/${conid}/info`);
+
+      // Curate: keep useful fields, drop verbose noise
+      const KEEP_FIELDS = [
+        'conid', 'symbol', 'con_id', 'company_name', 'exchange', 'listing_exchange',
+        'currency', 'instrument_type', 'local_symbol', 'companyName', 'category',
+        'industry', 'stock_type', 'maturity_date', 'put_or_call', 'strike',
+        'multiplier', 'expiry', 'underlying_conid', 'underlying_symbol',
+        'valid_exchanges', 'trading_class', 'min_tick', 'order_types',
+        'is_us', 'country', 'is_etf', 'is_event_contract',
+        'contract_month', 'last_trading_day', 'smart_available',
+      ];
+      const data: Record<string, unknown> = {};
+      for (const key of KEEP_FIELDS) {
+        if (raw[key] !== undefined && raw[key] !== null && raw[key] !== '') {
+          data[key] = raw[key];
+        }
+      }
+
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };

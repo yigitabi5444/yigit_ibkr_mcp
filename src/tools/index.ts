@@ -12,6 +12,7 @@ import { registerScannerTools } from './scanner.js';
 import { registerOrdersTradesTools } from './orders-trades.js';
 import { registerWatchlistTools } from './watchlists.js';
 import { registerCurrencyTools } from './currency.js';
+import { registerNewsTools } from './news.js';
 
 export function registerAllTools(
   server: McpServer,
@@ -29,4 +30,5 @@ export function registerAllTools(
   registerOrdersTradesTools(server, client, sessionManager);
   registerWatchlistTools(server, client, sessionManager);
   registerCurrencyTools(server, client, sessionManager);
+  registerNewsTools(server, client, sessionManager);
 }

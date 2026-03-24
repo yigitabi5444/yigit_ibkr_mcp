@@ -20,7 +20,8 @@ describe('Market Data Tools', () => {
     const data = JSON.parse(result.content[0].text);
 
     expect(data[0].conid).toBe(265598);
-    expect(data[0]['31']).toBe('175.50');
+    expect(data[0].lastPrice).toBe('175.50');
+    expect(data[0].bid).toBe('175.40');
     expect(client.get).toHaveBeenCalledWith(
       '/iserver/marketdata/snapshot',
       expect.objectContaining({ conids: '265598' }),
@@ -43,7 +44,7 @@ describe('Market Data Tools', () => {
     const result = await handler({ conids: [265598] });
     const data = JSON.parse(result.content[0].text);
 
-    expect(data[0]['31']).toBe('175.50');
+    expect(data[0].lastPrice).toBe('175.50');
     expect(client.get).toHaveBeenCalledTimes(2);
   });
 
