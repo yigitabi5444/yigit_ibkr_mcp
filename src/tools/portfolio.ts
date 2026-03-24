@@ -13,14 +13,30 @@ export function registerPortfolioTools(server: McpServer, client: IBClient): voi
   }, async ({ accountId }) => {
     try {
       const id = accountId || await client.getDefaultAccountId();
-      const allPositions: unknown[] = [];
-      let pageId = 0;
 
-      while (true) {
-        const page = await client.get<unknown[]>(`/portfolio/${id}/positions/${pageId}`);
-        if (!page || !Array.isArray(page) || page.length === 0) break;
-        allPositions.push(...page);
-        pageId++;
+      // Helper: fetch all pages
+      const fetchAllPages = async (): Promise<Record<string, unknown>[]> => {
+        const all: Record<string, unknown>[] = [];
+        let pageId = 0;
+        while (true) {
+          const page = await client.get<Record<string, unknown>[]>(`/portfolio/${id}/positions/${pageId}`);
+          if (!page || !Array.isArray(page) || page.length === 0) break;
+          all.push(...page);
+          pageId++;
+        }
+        return all;
+      };
+
+      let allPositions = await fetchAllPages();
+
+      // IB CP API warmup: first call after gateway start may return null option fields.
+      // Detect and retry once after a short delay.
+      const hasNullOptionFields = allPositions.some(
+        (p) => p.assetClass === 'OPT' && (!p.expiry || !p.putOrCall || p.strike === 0 || p.strike === '0'),
+      );
+      if (hasNullOptionFields) {
+        await new Promise((r) => setTimeout(r, 300));
+        allPositions = await fetchAllPages();
       }
 
       return {

@@ -26,16 +26,34 @@ export function registerAccountTools(server: McpServer, client: IBClient): void 
   }, async ({ accountId }) => {
     try {
       const id = accountId || await client.getDefaultAccountId();
-      const [rawSummary, ledger] = await Promise.all([
+      const [rawSummary, rawLedger] = await Promise.all([
         client.get<Record<string, { amount: number; currency: string; isNull: boolean }>>(`/portfolio/${id}/summary`),
-        client.get(`/portfolio/${id}/ledger`),
+        client.get<Record<string, Record<string, unknown>>>(`/portfolio/${id}/ledger`),
       ]);
 
-      // Curate: pick only the fields that matter
+      // Curate summary: pick only the fields that matter
       const pick = (key: string) => {
         const v = rawSummary?.[key];
         return v && !v.isNull ? v.amount : null;
       };
+
+      // Curate ledger: per currency, only the useful fields
+      const LEDGER_FIELDS = ['cashbalance', 'netliquidationvalue', 'stockmarketvalue', 'optionmarketvalue', 'unrealizedpnl', 'realizedpnl', 'exchangerate', 'interest'];
+      const cashByCurrency: Record<string, Record<string, unknown>> = {};
+      if (rawLedger) {
+        for (const [currency, fields] of Object.entries(rawLedger)) {
+          if (currency === 'BASE') continue; // Skip BASE — it's just USD duplicated
+          const curated: Record<string, unknown> = {};
+          for (const key of LEDGER_FIELDS) {
+            if (fields[key] !== undefined && fields[key] !== 0) {
+              curated[key] = fields[key];
+            }
+          }
+          if (Object.keys(curated).length > 0) {
+            cashByCurrency[currency] = curated;
+          }
+        }
+      }
 
       const summary = {
         accountId: id,
@@ -53,7 +71,7 @@ export function registerAccountTools(server: McpServer, client: IBClient): void 
         unrealizedpnl: pick('unrealizedpnl') ?? pick('accruedcash'),
         accrueddividend: pick('accrueddividend'),
         leverage: pick('leverage-s'),
-        cashByurrency: ledger,
+        cashByCurrency,
       };
 
       return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };

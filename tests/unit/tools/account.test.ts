@@ -32,7 +32,7 @@ describe('Account Tools', () => {
         buyingpower: { amount: 200000, currency: 'USD', isNull: false },
         grosspositionvalue: { amount: 75000, currency: 'USD', isNull: false },
       })
-      .mockResolvedValueOnce({ USD: { cashBalance: 50000 } });
+      .mockResolvedValueOnce({ USD: { cashbalance: 50000, unrealizedpnl: 1200, exchangerate: 1.0 } });
 
     const server = new McpServer({ name: 'test', version: '1.0' });
     registerAccountTools(server, client);
@@ -44,7 +44,8 @@ describe('Account Tools', () => {
     expect(data.netliquidation).toBe(100000);
     expect(data.totalcashvalue).toBe(50000);
     expect(data.buyingpower).toBe(200000);
-    expect(data.cashByurrency.USD.cashBalance).toBe(50000);
+    expect(data.cashByCurrency.USD.cashbalance).toBe(50000);
+    expect(data.cashByCurrency.USD.unrealizedpnl).toBe(1200);
   });
 
   it('get_account_allocation returns allocation data', async () => {
