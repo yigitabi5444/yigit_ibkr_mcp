@@ -33,13 +33,17 @@ export class SessionManager {
     process.stderr.write('[ibkr-mcp] Auth keepalive started (every 5 min).\n');
 
     this.keepaliveTimer = setInterval(async () => {
-      // Skip keepalive ping if brokerage tickle is already running (it does the same thing)
+      // Skip if brokerage tickle is already running (it does the same thing)
       if (this.tickleTimer) return;
 
+      // Check auth first — don't hit /tickle if session is dead
+      // (concurrent tickle calls interfere with the login flow)
       try {
+        const auth = await this.checkAuth();
+        if (!auth.authenticated) return; // Back off — user may be logging in
         await this.client.post('/tickle');
       } catch (err) {
-        process.stderr.write(`[ibkr-mcp] Auth keepalive failed: ${(err as Error).message}\n`);
+        // Silently back off on errors
       }
     }, KEEPALIVE_INTERVAL);
   }
@@ -101,7 +105,7 @@ export class SessionManager {
   /** Check if gateway is authenticated */
   async checkAuth(): Promise<{ authenticated: boolean; competing: boolean; connected: boolean }> {
     try {
-      const data = await this.client.post<{ authenticated?: boolean; competing?: boolean; connected?: boolean }>(
+      const data = await this.client.get<{ authenticated?: boolean; competing?: boolean; connected?: boolean }>(
         '/iserver/auth/status',
       );
       return {
