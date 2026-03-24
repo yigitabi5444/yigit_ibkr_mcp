@@ -27,6 +27,9 @@ async function main(): Promise<void> {
 
   registerAllTools(server, client, sessionManager);
 
+  // Keep SSO session alive — pings /tickle every 5min without grabbing brokerage session
+  sessionManager.startKeepalive();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 

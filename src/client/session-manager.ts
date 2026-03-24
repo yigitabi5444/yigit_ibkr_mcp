@@ -11,6 +11,7 @@ const READ_ONLY_PATTERNS = [
 
 export class SessionManager {
   private tickleTimer: ReturnType<typeof setInterval> | null = null;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private lastBrokerageCallTime = 0;
   private brokerageActive = false;
 
@@ -19,6 +20,29 @@ export class SessionManager {
     private tickleIntervalMs: number,
     private brokerageTimeoutMs: number,
   ) {}
+
+  /**
+   * Start always-on auth keepalive.
+   * Pings /tickle every 5 minutes to prevent the SSO session from expiring.
+   * This does NOT grab the brokerage session — phone stays connected.
+   */
+  startKeepalive(): void {
+    if (this.keepaliveTimer) return;
+
+    const KEEPALIVE_INTERVAL = 5 * 60 * 1000; // 5 minutes
+    process.stderr.write('[ibkr-mcp] Auth keepalive started (every 5 min).\n');
+
+    this.keepaliveTimer = setInterval(async () => {
+      // Skip keepalive ping if brokerage tickle is already running (it does the same thing)
+      if (this.tickleTimer) return;
+
+      try {
+        await this.client.post('/tickle');
+      } catch (err) {
+        process.stderr.write(`[ibkr-mcp] Auth keepalive failed: ${(err as Error).message}\n`);
+      }
+    }, KEEPALIVE_INTERVAL);
+  }
 
   /** Is this path read-only (no brokerage session needed)? */
   isReadOnly(path: string): boolean {
@@ -92,5 +116,9 @@ export class SessionManager {
 
   stop(): void {
     this.stopTickle();
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
   }
 }
