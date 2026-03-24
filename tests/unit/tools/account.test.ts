@@ -23,10 +23,15 @@ describe('Account Tools', () => {
     expect(data.selectedAccount).toBe('U1234567');
   });
 
-  it('get_account_summary merges summary and ledger', async () => {
+  it('get_account_summary returns curated fields', async () => {
     const { client } = createMockClient();
     (client.get as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ netLiquidation: { amount: 100000, currency: 'USD' } })
+      .mockResolvedValueOnce({
+        netliquidation: { amount: 100000, currency: 'USD', isNull: false },
+        totalcashvalue: { amount: 50000, currency: 'USD', isNull: false },
+        buyingpower: { amount: 200000, currency: 'USD', isNull: false },
+        grosspositionvalue: { amount: 75000, currency: 'USD', isNull: false },
+      })
       .mockResolvedValueOnce({ USD: { cashBalance: 50000 } });
 
     const server = new McpServer({ name: 'test', version: '1.0' });
@@ -36,8 +41,10 @@ describe('Account Tools', () => {
     const result = await handler({});
     const data = JSON.parse(result.content[0].text);
 
-    expect(data.summary.netLiquidation.amount).toBe(100000);
-    expect(data.ledger.USD.cashBalance).toBe(50000);
+    expect(data.netliquidation).toBe(100000);
+    expect(data.totalcashvalue).toBe(50000);
+    expect(data.buyingpower).toBe(200000);
+    expect(data.cashByurrency.USD.cashBalance).toBe(50000);
   });
 
   it('get_account_allocation returns allocation data', async () => {
