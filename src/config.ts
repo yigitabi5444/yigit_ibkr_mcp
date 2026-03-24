@@ -1,19 +1,17 @@
 export interface Config {
-  host: string;
-  port: number;
-  clientId: number;
+  gatewayUrl: string;
   accountId?: string;
-  marketDataType: number;
   timeoutMs: number;
+  brokerageTimeoutMs: number;
+  tickleIntervalMs: number;
 }
 
 export function loadConfig(): Config {
   return {
-    host: process.env.IBKR_HOST || '127.0.0.1',
-    port: parseInt(process.env.IBKR_PORT || '4001', 10),
-    clientId: parseInt(process.env.IBKR_CLIENT_ID || '0', 10),
+    gatewayUrl: process.env.IBKR_GATEWAY_URL || 'https://localhost:5000',
     accountId: process.env.IBKR_ACCOUNT_ID || undefined,
-    marketDataType: parseInt(process.env.IBKR_MARKET_DATA_TYPE || '3', 10),
     timeoutMs: parseInt(process.env.IBKR_TIMEOUT_MS || '15000', 10),
+    brokerageTimeoutMs: parseInt(process.env.IBKR_BROKERAGE_TIMEOUT_MS || '120000', 10),
+    tickleIntervalMs: parseInt(process.env.IBKR_TICKLE_INTERVAL_MS || '55000', 10),
   };
 }

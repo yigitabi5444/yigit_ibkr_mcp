@@ -1,150 +1,131 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { loadConfig } from '../../src/config.js';
-import { IBConnection } from '../../src/connection.js';
+import { IBClient } from '../../src/client/ib-client.js';
+import { SessionManager } from '../../src/client/session-manager.js';
 
-const IBKR_HOST = process.env.IBKR_HOST;
+const GATEWAY_URL = process.env.IBKR_GATEWAY_URL;
 
-// Skip entire suite if no host is configured
-const describeIf = IBKR_HOST ? describe : describe.skip;
+// Skip entire suite if no gateway URL is configured
+const describeIf = GATEWAY_URL ? describe : describe.skip;
 
-describeIf('Live IB Gateway Integration', () => {
-  let conn: IBConnection;
+describeIf('Live Client Portal Gateway Integration', () => {
+  let client: IBClient;
+  let sessionManager: SessionManager;
   let accountId: string;
 
   beforeAll(async () => {
     const config = loadConfig();
-    conn = new IBConnection(config);
-    await conn.connect();
-    accountId = await conn.getAccountId();
+    client = new IBClient(config);
+    sessionManager = new SessionManager(client, config.tickleIntervalMs, config.brokerageTimeoutMs);
+
+    // Verify gateway is authenticated
+    const status = await sessionManager.checkAuth();
+    if (!status.authenticated) {
+      throw new Error('Client Portal Gateway is not authenticated. Login at ' + config.gatewayUrl);
+    }
+
+    accountId = await client.getDefaultAccountId();
   }, 30000);
 
   afterAll(() => {
-    conn?.disconnect();
+    sessionManager?.stop();
   });
 
-  it('connects and resolves account', () => {
-    expect(conn.isConnected).toBe(true);
-    expect(accountId).toBeDefined();
-    expect(accountId.length).toBeGreaterThan(0);
+  it('checks auth status', async () => {
+    const status = await sessionManager.checkAuth();
+    expect(status.authenticated).toBe(true);
+    expect(status.connected).toBe(true);
   });
 
-  it('gets managed accounts', async () => {
-    const accounts = await conn.ib.getManagedAccounts();
-    expect(accounts.length).toBeGreaterThan(0);
-    expect(accounts).toContain(accountId);
+  it('gets accounts', async () => {
+    const data = await client.get<{ accounts?: string[] }>('/iserver/accounts');
+    expect(data.accounts).toBeDefined();
+    expect(data.accounts!.length).toBeGreaterThan(0);
   });
 
   it('gets account summary', async () => {
-    const summary = await conn.subscribeFirst(
-      conn.ib.getAccountSummary('All', 'NetLiquidation,TotalCashValue,BuyingPower'),
-    );
+    const summary = await client.get(`/portfolio/${accountId}/summary`);
     expect(summary).toBeDefined();
-    expect(summary.all).toBeDefined();
-    // Should have at least one account
-    expect(summary.all.size).toBeGreaterThan(0);
   });
 
   it('gets positions', async () => {
-    const positions = await conn.subscribeFirst(conn.ib.getPositions());
-    expect(positions).toBeDefined();
-    expect(positions.all).toBeDefined();
-    // positions.all is a Map<AccountId, Position[]>
-    // May be empty if no positions, but should not throw
+    const page0 = await client.get<unknown[]>(`/portfolio/${accountId}/positions/0`);
+    expect(Array.isArray(page0)).toBe(true);
   });
 
-  it('gets P&L', async () => {
-    const pnl = await conn.subscribeFirst(conn.ib.getPnL(accountId, ''));
-    expect(pnl).toBeDefined();
-    // PnL should have at least one of these fields
-    expect(
-      pnl.dailyPnL !== undefined ||
-      pnl.unrealizedPnL !== undefined ||
-      pnl.realizedPnL !== undefined,
-    ).toBe(true);
+  it('gets account allocation', async () => {
+    const allocation = await client.get(`/portfolio/${accountId}/allocation`);
+    expect(allocation).toBeDefined();
   });
 
   it('searches for AAPL', async () => {
-    const results = await conn.ib.getMatchingSymbols('AAPL');
+    const results = await client.post<Array<{ conid: number; companyName: string }>>('/iserver/secdef/search', { symbol: 'AAPL' });
     expect(results.length).toBeGreaterThan(0);
-    const aapl = results.find((r) => r.contract?.symbol === 'AAPL');
+    const aapl = results.find((r) => r.companyName?.includes('APPLE'));
     expect(aapl).toBeDefined();
-    expect(aapl!.contract?.conId).toBeDefined();
   });
 
-  it('gets contract details for AAPL', async () => {
-    const results = await conn.ib.getMatchingSymbols('AAPL');
-    const aapl = results.find((r) => r.contract?.symbol === 'AAPL' && r.contract?.secType === 'STK');
-    expect(aapl).toBeDefined();
-
-    const details = await conn.ib.getContractDetails({ conId: aapl!.contract!.conId } as never);
-    expect(details.length).toBeGreaterThan(0);
-    expect(details[0].longName).toBeDefined();
+  it('gets contract details', async () => {
+    const results = await client.post<Array<{ conid: number }>>('/iserver/secdef/search', { symbol: 'AAPL' });
+    const conid = results[0].conid;
+    const details = await client.get(`/iserver/contract/${conid}/info`);
+    expect(details).toBeDefined();
   });
 
+  it('gets option strikes for AAPL', async () => {
+    const results = await client.post<Array<{ conid: number }>>('/iserver/secdef/search', { symbol: 'AAPL' });
+    const conid = results[0].conid;
+    const strikes = await client.get<{ call?: number[]; put?: number[] }>('/iserver/secdef/strikes', {
+      conid, sectype: 'OPT',
+    });
+    // May need a specific month, but should at least not throw
+    expect(strikes).toBeDefined();
+  });
+
+  it('gets stock contracts for AAPL', async () => {
+    const data = await client.get('/trsrv/stocks', { symbols: 'AAPL' });
+    expect(data).toBeDefined();
+  });
+
+  // Brokerage session tests (these will grab the session temporarily)
   it('gets market data snapshot', async () => {
-    const { Stock } = await import('@stoqey/ib');
-    const contract = new Stock('AAPL', 'SMART', 'USD');
-    const ticks = await conn.ib.getMarketDataSnapshot(contract, '', false);
-    expect(ticks).toBeDefined();
-    // May be empty on first call (warmup), but should not throw
+    await sessionManager.ensureBrokerageSession();
+    const results = await client.post<Array<{ conid: number }>>('/iserver/secdef/search', { symbol: 'AAPL' });
+    const conid = results[0].conid;
+
+    const data = await client.get('/iserver/marketdata/snapshot', {
+      conids: String(conid),
+      fields: '31,84,86,87',
+    });
+    expect(data).toBeDefined();
+  }, 15000);
+
+  it('gets P&L', async () => {
+    await sessionManager.ensureBrokerageSession();
+    const data = await client.get('/iserver/account/pnl/partitioned');
+    expect(data).toBeDefined();
   });
 
-  it('gets historical data for AAPL', async () => {
-    const { BarSizeSetting, WhatToShow, Stock } = await import('@stoqey/ib');
-    const contract = new Stock('AAPL', 'SMART', 'USD');
-    const bars = await conn.ib.getHistoricalData(
-      contract,
-      '',
-      '5 D',
-      BarSizeSetting.DAYS_ONE,
-      WhatToShow.TRADES,
-      1,
-      2,
-    );
-    expect(Array.isArray(bars)).toBe(true);
-    expect(bars.length).toBeGreaterThan(0);
-    expect(bars[0]).toHaveProperty('open');
-    expect(bars[0]).toHaveProperty('close');
-    expect(bars[0]).toHaveProperty('volume');
+  it('gets live orders', async () => {
+    await sessionManager.ensureBrokerageSession();
+    const data = await client.get('/iserver/account/orders');
+    expect(data).toBeDefined();
   });
 
-  it('gets option chain params for AAPL', async () => {
-    const { SecType } = await import('@stoqey/ib');
-    const params = await conn.ib.getSecDefOptParams('AAPL', '', SecType.STK, 265598);
-    expect(params.length).toBeGreaterThan(0);
-    expect(params[0].expirations.length).toBeGreaterThan(0);
-    expect(params[0].strikes.length).toBeGreaterThan(0);
+  it('gets trades', async () => {
+    await sessionManager.ensureBrokerageSession();
+    const data = await client.get('/iserver/account/trades');
+    expect(data).toBeDefined();
   });
 
-  it('gets scanner parameters', async () => {
-    const xml = await conn.ib.getScannerParameters();
-    expect(xml).toBeDefined();
-    expect(xml.length).toBeGreaterThan(0);
-    // Should be XML
-    expect(xml).toContain('<?xml');
+  it('gets exchange rate', async () => {
+    await sessionManager.ensureBrokerageSession();
+    const data = await client.get('/iserver/exchangerate', { source: 'USD', target: 'EUR' });
+    expect(data).toBeDefined();
   });
 
-  it('gets open orders', async () => {
-    const orders = await conn.ib.getAllOpenOrders();
-    expect(orders).toBeDefined();
-    // May be empty, but should not throw
-  });
-
-  it('gets execution details', async () => {
-    const executions = await conn.ib.getExecutionDetails({} as never);
-    expect(executions).toBeDefined();
-    // May be empty if no trades today
-  });
-
-  it('gets exchange rate EUR/USD', async () => {
-    const { SecType } = await import('@stoqey/ib');
-    const contract = {
-      symbol: 'EUR',
-      secType: SecType.CASH,
-      currency: 'USD',
-      exchange: 'IDEALPRO',
-    } as never;
-    const ticks = await conn.ib.getMarketDataSnapshot(contract, '', false);
-    expect(ticks).toBeDefined();
+  it('tickle works', async () => {
+    const data = await client.post<{ session?: string }>('/tickle');
+    expect(data).toBeDefined();
   });
 });

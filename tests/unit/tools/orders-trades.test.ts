@@ -1,68 +1,66 @@
 import { describe, it, expect, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createMockConnection } from '../helpers/mock-connection.js';
+import { createMockClient } from '../helpers/mock-client.js';
 import { getToolHandler } from '../helpers/get-tool-handler.js';
 import { registerOrdersTradesTools } from '../../../src/tools/orders-trades.js';
 
 describe('Orders & Trades Tools', () => {
-  it('get_live_orders returns open orders', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getAllOpenOrders.mockResolvedValue([
-      {
-        contract: { conId: 265598, symbol: 'AAPL', secType: 'STK' },
-        order: { orderId: 1, action: 'BUY', totalQuantity: 100, orderType: 'LMT', lmtPrice: 175 },
-        orderState: { status: 'Submitted' },
-      },
-    ]);
+  it('get_live_orders returns orders array', async () => {
+    const { client, sessionManager } = createMockClient();
+    const ordersData = {
+      orders: [
+        { orderId: 101, symbol: 'AAPL', side: 'BUY', orderType: 'LMT', price: 170.0, quantity: 10, status: 'PreSubmitted' },
+        { orderId: 102, symbol: 'MSFT', side: 'SELL', orderType: 'MKT', quantity: 5, status: 'Submitted' },
+      ],
+    };
+    (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(ordersData);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerOrdersTradesTools(server, conn);
+    registerOrdersTradesTools(server, client, sessionManager);
 
     const handler = getToolHandler(server, 'get_live_orders');
-
     const result = await handler({});
     const data = JSON.parse(result.content[0].text);
-    expect(data).toHaveLength(1);
-    expect(data[0].order.orderId).toBe(1);
+
+    expect(data.orders).toHaveLength(2);
+    expect(data.orders[0].orderId).toBe(101);
+    expect(sessionManager.ensureBrokerageSession).toHaveBeenCalledOnce();
+    expect(client.get).toHaveBeenCalledWith('/iserver/account/orders');
   });
 
-  it('get_trades returns executions', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getExecutionDetails.mockResolvedValue([
-      {
-        contract: { conId: 265598, symbol: 'AAPL' },
-        execution: { execId: 'exec1', time: '20250320 14:30:00', side: 'BOT', shares: 100, price: 175.50 },
-      },
-    ]);
+  it('get_trades returns trades array', async () => {
+    const { client, sessionManager } = createMockClient();
+    const tradesData = [
+      { execution_id: 'exec1', symbol: 'AAPL', side: 'BOT', size: 100, price: 175.0, commission: 1.0 },
+      { execution_id: 'exec2', symbol: 'TSLA', side: 'SLD', size: 50, price: 250.0, commission: 1.0 },
+    ];
+    (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(tradesData);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerOrdersTradesTools(server, conn);
+    registerOrdersTradesTools(server, client, sessionManager);
 
     const handler = getToolHandler(server, 'get_trades');
-
     const result = await handler({});
     const data = JSON.parse(result.content[0].text);
-    expect(data).toHaveLength(1);
-    expect(data[0].execution.price).toBe(175.50);
+
+    expect(data).toHaveLength(2);
+    expect(data[0].symbol).toBe('AAPL');
+    expect(data[1].side).toBe('SLD');
+    expect(sessionManager.ensureBrokerageSession).toHaveBeenCalled();
+    expect(client.get).toHaveBeenCalledWith('/iserver/account/trades');
   });
 
-  it('get_order_status finds matching order', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getAllOpenOrders.mockResolvedValue([
-      { order: { orderId: 1 }, contract: { symbol: 'AAPL' }, orderState: { status: 'Submitted' } },
-      { order: { orderId: 2 }, contract: { symbol: 'MSFT' }, orderState: { status: 'Filled' } },
-    ]);
+  it('get_live_orders returns error on failure', async () => {
+    const { client, sessionManager } = createMockClient();
+    (client.get as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Gateway timeout'));
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerOrdersTradesTools(server, conn);
+    registerOrdersTradesTools(server, client, sessionManager);
 
-    const handler = getToolHandler(server, 'get_order_status');
+    const handler = getToolHandler(server, 'get_live_orders');
+    const result = await handler({});
 
-    const result = await handler({ orderId: 2 });
-    const data = JSON.parse(result.content[0].text);
-    expect(data.contract.symbol).toBe('MSFT');
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Gateway timeout');
   });
 });

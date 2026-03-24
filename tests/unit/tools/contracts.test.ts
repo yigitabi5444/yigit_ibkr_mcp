@@ -1,68 +1,65 @@
 import { describe, it, expect, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createMockConnection } from '../helpers/mock-connection.js';
+import { createMockClient } from '../helpers/mock-client.js';
 import { getToolHandler } from '../helpers/get-tool-handler.js';
 import { registerContractTools } from '../../../src/tools/contracts.js';
 
 describe('Contract Tools', () => {
-  it('search_contracts returns matching symbols', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getMatchingSymbols.mockResolvedValue([
-      { contract: { conId: 265598, symbol: 'AAPL', secType: 'STK', primaryExch: 'NASDAQ', currency: 'USD' }, derivativeSecTypes: ['OPT'] },
-      { contract: { conId: 265599, symbol: 'AAPL', secType: 'STK', primaryExch: 'LSE', currency: 'GBP' }, derivativeSecTypes: [] },
-    ]);
+  it('search_contracts posts search body and returns results', async () => {
+    const { client } = createMockClient();
+    const searchResults = [
+      { conid: 265598, companyHeader: 'APPLE INC', companyName: 'APPLE INC', symbol: 'AAPL', secType: 'STK' },
+      { conid: 272093, companyHeader: 'MICROSOFT CORP', companyName: 'MICROSOFT', symbol: 'MSFT', secType: 'STK' },
+    ];
+    (client.post as ReturnType<typeof vi.fn>).mockResolvedValue(searchResults);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerContractTools(server, conn);
+    registerContractTools(server, client);
 
     const handler = getToolHandler(server, 'search_contracts');
-
     const result = await handler({ symbol: 'AAPL' });
     const data = JSON.parse(result.content[0].text);
+
     expect(data).toHaveLength(2);
-    expect(data[0].conId).toBe(265598);
     expect(data[0].symbol).toBe('AAPL');
+    expect(client.post).toHaveBeenCalledWith('/iserver/secdef/search', { symbol: 'AAPL' });
   });
 
-  it('search_contracts filters by secType', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getMatchingSymbols.mockResolvedValue([
-      { contract: { conId: 1, symbol: 'ES', secType: 'FUT', currency: 'USD' }, derivativeSecTypes: [] },
-      { contract: { conId: 2, symbol: 'ES', secType: 'IND', currency: 'USD' }, derivativeSecTypes: [] },
-    ]);
+  it('search_contracts passes secType filter', async () => {
+    const { client } = createMockClient();
+    (client.post as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerContractTools(server, conn);
+    registerContractTools(server, client);
 
     const handler = getToolHandler(server, 'search_contracts');
+    await handler({ symbol: 'ES', secType: 'FUT' });
 
-    const result = await handler({ symbol: 'ES', secType: 'FUT' });
-    const data = JSON.parse(result.content[0].text);
-    expect(data).toHaveLength(1);
-    expect(data[0].secType).toBe('FUT');
+    expect(client.post).toHaveBeenCalledWith('/iserver/secdef/search', { symbol: 'ES', secType: 'FUT' });
   });
 
-  it('get_contract_details returns full details', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getContractDetails.mockResolvedValue([{
-      contract: { conId: 265598, symbol: 'AAPL', secType: 'STK', exchange: 'SMART', currency: 'USD' },
-      longName: 'Apple Inc.',
-      category: 'Technology',
+  it('get_contract_details returns contract info', async () => {
+    const { client } = createMockClient();
+    const contractInfo = {
+      conid: 265598,
+      symbol: 'AAPL',
+      exchange: 'NASDAQ',
+      currency: 'USD',
       minTick: 0.01,
-      validExchanges: 'SMART,NYSE,ARCA',
-    }]);
+      validExchanges: 'SMART,NASDAQ,NYSE',
+    };
+    (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(contractInfo);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerContractTools(server, conn);
+    registerContractTools(server, client);
 
     const handler = getToolHandler(server, 'get_contract_details');
-
     const result = await handler({ conid: 265598 });
     const data = JSON.parse(result.content[0].text);
-    expect(data[0].longName).toBe('Apple Inc.');
-    expect(data[0].minTick).toBe(0.01);
+
+    expect(data.conid).toBe(265598);
+    expect(data.symbol).toBe('AAPL');
+    expect(data.currency).toBe('USD');
+    expect(client.get).toHaveBeenCalledWith('/iserver/contract/265598/info');
   });
 });

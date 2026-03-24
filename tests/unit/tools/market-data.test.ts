@@ -1,79 +1,73 @@
 import { describe, it, expect, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createMockConnection } from '../helpers/mock-connection.js';
+import { createMockClient } from '../helpers/mock-client.js';
 import { getToolHandler } from '../helpers/get-tool-handler.js';
 import { registerMarketDataTools } from '../../../src/tools/market-data.js';
 
 describe('Market Data Tools', () => {
-  it('get_market_snapshot returns tick data', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getMarketDataSnapshot.mockResolvedValue([
-      { tickType: 4, value: 178.52 },  // Last
-      { tickType: 1, value: 178.50 },  // Bid
-      { tickType: 2, value: 178.54 },  // Ask
-      { tickType: 8, value: 52431200 }, // Volume
-    ]);
+  it('get_market_snapshot returns field data and passes conids', async () => {
+    const { client, sessionManager } = createMockClient();
+    const snapshot = [
+      { conid: 265598, '31': '175.50', '84': '175.40', '85': '175.60', '86': '175.80' },
+    ];
+    (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(snapshot);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, conn);
+    registerMarketDataTools(server, client, sessionManager);
 
     const handler = getToolHandler(server, 'get_market_snapshot');
-
     const result = await handler({ conids: [265598] });
     const data = JSON.parse(result.content[0].text);
-    expect(data).toHaveLength(1);
-    expect(data[0].conId).toBe(265598);
-    expect(data[0].tick_4).toBe(178.52);
+
+    expect(data[0].conid).toBe(265598);
+    expect(data[0]['31']).toBe('175.50');
+    expect(client.get).toHaveBeenCalledWith(
+      '/iserver/marketdata/snapshot',
+      expect.objectContaining({ conids: '265598' }),
+    );
   });
 
-  it('get_price_history returns bars', async () => {
-    const { conn, mockApi } = createMockConnection();
+  it('get_market_snapshot retries on warmup (empty first response)', async () => {
+    const { client, sessionManager } = createMockClient();
+    const emptySnapshot = [{ conid: 265598, conidEx: '265598', server_id: 'abc' }];
+    const fullSnapshot = [{ conid: 265598, '31': '175.50', '84': '175.40' }];
 
-    mockApi.getHistoricalData.mockResolvedValue([
-      { time: '1700000000', open: 175.0, high: 178.5, low: 174.5, close: 178.0, volume: 50000 },
-      { time: '1700086400', open: 178.0, high: 180.0, low: 177.0, close: 179.5, volume: 45000 },
-    ]);
+    (client.get as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(emptySnapshot)
+      .mockResolvedValueOnce(fullSnapshot);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, conn);
+    registerMarketDataTools(server, client, sessionManager);
+
+    const handler = getToolHandler(server, 'get_market_snapshot');
+    const result = await handler({ conids: [265598] });
+    const data = JSON.parse(result.content[0].text);
+
+    expect(data[0]['31']).toBe('175.50');
+    expect(client.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('get_price_history returns OHLCV bars', async () => {
+    const { client, sessionManager } = createMockClient();
+    const history = {
+      symbol: 'AAPL',
+      data: [
+        { o: 174.0, h: 176.5, l: 173.5, c: 175.5, v: 5000000, t: 1700000000 },
+        { o: 175.5, h: 177.0, l: 175.0, c: 176.0, v: 4500000, t: 1700086400 },
+      ],
+    };
+    (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(history);
+
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerMarketDataTools(server, client, sessionManager);
 
     const handler = getToolHandler(server, 'get_price_history');
-
     const result = await handler({ conid: 265598, period: '1m', bar: '1d' });
     const data = JSON.parse(result.content[0].text);
-    expect(data).toHaveLength(2);
-    expect(data[0].close).toBe(178.0);
-  });
 
-  it('get_price_history rejects invalid bar size', async () => {
-    const { conn } = createMockConnection();
-
-    const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, conn);
-
-    const handler = getToolHandler(server, 'get_price_history');
-
-    const result = await handler({ conid: 265598, period: '1m', bar: 'invalid' });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Invalid bar size');
-  });
-
-  it('get_exchange_rate returns FX data', async () => {
-    const { conn, mockApi } = createMockConnection();
-
-    mockApi.getMarketDataSnapshot.mockResolvedValue([
-      { tickType: 1, value: 1.0821 },
-      { tickType: 2, value: 1.0823 },
-    ]);
-
-    const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, conn);
-
-    const handler = getToolHandler(server, 'get_exchange_rate');
-
-    const result = await handler({ source: 'EUR', target: 'USD' });
-    const data = JSON.parse(result.content[0].text);
-    expect(data.pair).toBe('EUR/USD');
+    expect(data.symbol).toBe('AAPL');
+    expect(data.data).toHaveLength(2);
+    expect(data.data[0].o).toBe(174.0);
+    expect(sessionManager.ensureBrokerageSession).toHaveBeenCalled();
   });
 });

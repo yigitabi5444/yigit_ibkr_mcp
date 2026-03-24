@@ -1,16 +1,16 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { IBConnection } from '../connection.js';
+import { IBClient } from '../client/ib-client.js';
 
-export function registerAccountTools(server: McpServer, conn: IBConnection): void {
+export function registerAccountTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_accounts', {
     title: 'Get Accounts',
-    description: 'List all brokerage accounts. Returns account IDs that can be used with other tools.',
+    description: 'List all brokerage accounts with IDs and capabilities. Returns account IDs that can be used with other tools.',
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      const accounts = await conn.ib.getManagedAccounts();
-      return { content: [{ type: 'text', text: JSON.stringify({ accounts }, null, 2) }] };
+      const data = await client.get('/iserver/accounts');
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
@@ -18,48 +18,36 @@ export function registerAccountTools(server: McpServer, conn: IBConnection): voi
 
   server.registerTool('get_account_summary', {
     title: 'Get Account Summary',
-    description: 'Get comprehensive account summary: balances, margin requirements, buying power, net liquidation value, and cash breakdown by currency.',
+    description: 'Get comprehensive account summary: balances, margin requirements, buying power, net liquidation value, and cash breakdown by currency. Merges portfolio summary and ledger data.',
     inputSchema: {
       accountId: z.string().optional().describe('Account ID. Uses default account if omitted.'),
     },
     annotations: { readOnlyHint: true },
   }, async ({ accountId }) => {
     try {
-      const tags = [
-        'AccountType', 'NetLiquidation', 'TotalCashValue', 'SettledCash',
-        'AccruedCash', 'BuyingPower', 'EquityWithLoanValue', 'PreviousEquityWithLoanValue',
-        'GrossPositionValue', 'RegTEquity', 'RegTMargin', 'SMA',
-        'InitMarginReq', 'MaintMarginReq', 'AvailableFunds', 'ExcessLiquidity',
-        'Cushion', 'FullInitMarginReq', 'FullMaintMarginReq', 'FullAvailableFunds',
-        'FullExcessLiquidity', 'LookAheadNextChange', 'LookAheadInitMarginReq',
-        'LookAheadMaintMarginReq', 'LookAheadAvailableFunds', 'LookAheadExcessLiquidity',
-        'HighestSeverity', 'DayTradesRemaining', 'Leverage',
-        'Currency',
-      ].join(',');
+      const id = accountId || await client.getDefaultAccountId();
+      const [summary, ledger] = await Promise.all([
+        client.get(`/portfolio/${id}/summary`),
+        client.get(`/portfolio/${id}/ledger`),
+      ]);
+      return { content: [{ type: 'text', text: JSON.stringify({ summary, ledger }, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
+    }
+  });
 
-      const summary = await conn.subscribeFirst(
-        conn.ib.getAccountSummary('All', tags),
-      );
-
-      // AccountSummariesUpdate.all is ReadonlyMap<AccountId, ReadonlyMap<TagName, ReadonlyMap<Currency, { value, ingressTm }>>>
-      const id = accountId || await conn.getAccountId();
-      const result: Record<string, unknown> = { accountId: id };
-
-      if (summary?.all) {
-        for (const [acct, tagValues] of summary.all) {
-          if (accountId && acct !== accountId) continue;
-          result.accountId = acct;
-          for (const [tag, currencyValues] of tagValues) {
-            // Take the first currency value (usually BASE or USD)
-            const firstVal = currencyValues.values().next().value;
-            if (firstVal) {
-              result[tag] = firstVal.value;
-            }
-          }
-        }
-      }
-
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  server.registerTool('get_account_allocation', {
+    title: 'Get Account Allocation',
+    description: 'Get asset class allocation breakdown showing distribution across stocks, options, futures, cash, bonds, etc. as percentages and values.',
+    inputSchema: {
+      accountId: z.string().optional().describe('Account ID. Uses default account if omitted.'),
+    },
+    annotations: { readOnlyHint: true },
+  }, async ({ accountId }) => {
+    try {
+      const id = accountId || await client.getDefaultAccountId();
+      const data = await client.get(`/portfolio/${id}/allocation`);
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }

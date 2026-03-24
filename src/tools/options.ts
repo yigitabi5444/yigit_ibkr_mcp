@@ -1,49 +1,57 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { IBConnection } from '../connection.js';
-import { SecType } from '@stoqey/ib';
+import { IBClient } from '../client/ib-client.js';
 
-export function registerOptionsTools(server: McpServer, conn: IBConnection): void {
+interface StrikesResponse { call?: number[]; put?: number[] }
+interface SecDefInfoItem { conid?: number; strike?: number; right?: string; month?: string; [key: string]: unknown }
+
+export function registerOptionsTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_option_chain', {
     title: 'Get Option Chain',
-    description: 'Get the full option chain for an underlying security. Returns available expirations, strikes, exchange, and multiplier. Use getSecDefOptParams which is much faster than reqContractDetails for options.',
+    description: 'Get the full option chain for an underlying security. Composite tool: (1) fetches strike prices, (2) fetches option conids per strike/right. Returns structured data with strikes and put/call conids. Use conids with get_market_snapshot for IV/greeks.',
     inputSchema: {
-      symbol: z.string().describe('Underlying symbol (e.g. "AAPL")'),
       conid: z.number().describe('Contract ID of the underlying security'),
-      exchange: z.string().optional().describe('Exchange filter. If omitted, returns all exchanges.'),
+      month: z.string().optional().describe('Expiration month (e.g. "JAN25", "FEB25"). If omitted, returns nearest.'),
+      exchange: z.string().optional().describe('Exchange filter (e.g. "SMART")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ symbol, conid, exchange }) => {
+  }, async ({ conid, month, exchange }) => {
     try {
-      const params = await conn.ib.getSecDefOptParams(
-        symbol,
-        '',              // futFopExchange: empty for stocks
-        SecType.STK,     // underlying sec type
-        conid,
-      );
+      const strikesParams: Record<string, string | number | boolean | undefined> = {
+        conid, sectype: 'OPT',
+      };
+      if (month) strikesParams.month = month;
+      if (exchange) strikesParams.exchange = exchange;
 
-      let results = params;
-      if (exchange) {
-        results = params.filter((p: { exchange: string }) => p.exchange === exchange);
+      const strikes = await client.get<StrikesResponse>('/iserver/secdef/strikes', strikesParams);
+      if (!strikes || (!strikes.call?.length && !strikes.put?.length)) {
+        return { content: [{ type: 'text', text: JSON.stringify({ message: 'No option strikes found.', params: strikesParams }, null, 2) }] };
       }
 
-      const formatted = results.map((p) => ({
-        exchange: p.exchange,
-        underlyingConId: p.underlyingConId,
-        tradingClass: p.tradingClass,
-        multiplier: p.multiplier,
-        expirations: [...p.expirations].sort(),
-        strikes: [...p.strikes].sort((a, b) => a - b),
-      }));
+      // Fetch option conids for each strike/right
+      const allStrikes = new Set([...(strikes.call || []), ...(strikes.put || [])]);
+      const optionContracts: SecDefInfoItem[] = [];
+
+      for (const right of ['C', 'P'] as const) {
+        for (const strike of allStrikes) {
+          try {
+            const info = await client.get<SecDefInfoItem[]>('/iserver/secdef/info', {
+              conid, sectype: 'OPT', month: month || '', strike, right,
+            });
+            if (Array.isArray(info)) optionContracts.push(...info);
+          } catch { /* skip individual failures */ }
+        }
+      }
 
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
-            underlying: symbol,
             underlying_conid: conid,
-            chains: formatted,
-            total_chains: formatted.length,
+            month: month || 'nearest',
+            strikes: { call: strikes.call || [], put: strikes.put || [] },
+            contracts: optionContracts,
+            total_contracts: optionContracts.length,
           }, null, 2),
         }],
       };
@@ -54,49 +62,21 @@ export function registerOptionsTools(server: McpServer, conn: IBConnection): voi
 
   server.registerTool('get_option_strikes', {
     title: 'Get Option Strikes',
-    description: 'Get available strike prices for options on an underlying security. Filters the option chain params by exchange and expiration.',
+    description: 'Get available strike prices for options on an underlying security for a specific expiration month.',
     inputSchema: {
-      symbol: z.string().describe('Underlying symbol'),
       conid: z.number().describe('Contract ID of the underlying security'),
-      exchange: z.string().optional().describe('Exchange filter (e.g. "SMART")'),
-      expiration: z.string().optional().describe('Filter by expiration date (YYYYMMDD format)'),
+      month: z.string().describe('Expiration month (e.g. "JAN25", "FEB25")'),
+      exchange: z.string().optional().describe('Exchange filter'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ symbol, conid, exchange, expiration }) => {
+  }, async ({ conid, month, exchange }) => {
     try {
-      const params = await conn.ib.getSecDefOptParams(
-        symbol,
-        '',
-        SecType.STK,
-        conid,
-      );
-
-      let filtered = params;
-      if (exchange) {
-        filtered = filtered.filter((p) => p.exchange === exchange);
-      }
-
-      const result = filtered.map((p) => {
-        const expirations = [...p.expirations];
-        const strikes = [...p.strikes].sort((a, b) => a - b);
-
-        if (expiration) {
-          const hasExpiry = expirations.includes(expiration);
-          return {
-            exchange: p.exchange,
-            expiration: hasExpiry ? expiration : 'not found',
-            strikes: hasExpiry ? strikes : [],
-          };
-        }
-
-        return {
-          exchange: p.exchange,
-          expirations: expirations.sort(),
-          strikes,
-        };
-      });
-
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      const params: Record<string, string | number | boolean | undefined> = {
+        conid, sectype: 'OPT', month,
+      };
+      if (exchange) params.exchange = exchange;
+      const data = await client.get('/iserver/secdef/strikes', params);
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
