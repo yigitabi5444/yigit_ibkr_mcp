@@ -75,11 +75,15 @@ describeIf('Live Client Portal Gateway Integration', () => {
   it('gets option strikes for AAPL', async () => {
     const results = await client.post<Array<{ conid: number }>>('/iserver/secdef/search', { symbol: 'AAPL' });
     const conid = results[0].conid;
+    // Month is required — use next month
+    const now = new Date();
+    now.setMonth(now.getMonth() + 1);
+    const month = now.toLocaleString('en-US', { month: 'short' }).toUpperCase() + String(now.getFullYear()).slice(-2);
     const strikes = await client.get<{ call?: number[]; put?: number[] }>('/iserver/secdef/strikes', {
-      conid, sectype: 'OPT',
+      conid, sectype: 'OPT', month,
     });
-    // May need a specific month, but should at least not throw
     expect(strikes).toBeDefined();
+    expect(strikes.call?.length || strikes.put?.length).toBeGreaterThan(0);
   });
 
   it('gets stock contracts for AAPL', async () => {

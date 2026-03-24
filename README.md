@@ -67,9 +67,20 @@ IB only allows one "brokerage session" per username. This MCP handles it intelli
 
 ### Prerequisites
 
-- [Client Portal Gateway](https://www.interactivebrokers.com/en/trading/ib-api.php) (download, extract to `clientportal.gw/` in this repo)
-- Node.js 18+
-- Java Runtime Environment (for the gateway)
+- **Node.js 18+**
+- **Java Runtime** (required by the Client Portal Gateway)
+  ```bash
+  # macOS
+  brew install openjdk
+  sudo ln -sfn $(brew --prefix openjdk)/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk.jdk
+
+  # Ubuntu/Debian
+  sudo apt install default-jre
+
+  # Verify
+  java -version
+  ```
+- **Client Portal Gateway** — the IB-provided REST gateway (included in this repo at `clientportal.gw/`, gitignored)
 
 ### Install & Build
 
@@ -85,7 +96,7 @@ npm run build
 1. Download the [Client Portal Gateway](https://download2.interactivebrokers.com/portal/clientportal.gw.zip)
 2. Extract to `clientportal.gw/` inside this repo (it's gitignored)
 3. The MCP will auto-start it on launch
-4. First time: open `https://localhost:5000/` in your browser and login
+4. First time: open `https://localhost:5001/` in your browser and login
 
 ### Add to Claude Desktop
 
@@ -96,7 +107,7 @@ npm run build
       "command": "node",
       "args": ["/path/to/yigit_ibkr_mcp/dist/index.js"],
       "env": {
-        "IBKR_GATEWAY_URL": "https://localhost:5000"
+        "IBKR_GATEWAY_URL": "https://localhost:5001"
       }
     }
   }
@@ -151,7 +162,7 @@ npm run build
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `IBKR_GATEWAY_URL` | `https://localhost:5000` | Client Portal Gateway URL |
+| `IBKR_GATEWAY_URL` | `https://localhost:5001` | Client Portal Gateway URL |
 | `IBKR_ACCOUNT_ID` | *(auto-detected)* | Default account ID |
 | `IBKR_TIMEOUT_MS` | `15000` | Request timeout in ms |
 | `IBKR_BROKERAGE_TIMEOUT_MS` | `120000` (2min) | Idle time before releasing brokerage session |
@@ -193,7 +204,7 @@ npm run test:integration  # Integration tests (requires live CP Gateway)
 ### Running Integration Tests
 
 ```bash
-IBKR_GATEWAY_URL=https://localhost:5000 npm run test:integration
+IBKR_GATEWAY_URL=https://localhost:5001 npm run test:integration
 ```
 
 ## License

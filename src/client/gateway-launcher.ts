@@ -1,78 +1,103 @@
-import { spawn, ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Agent } from 'node:https';
 
-const httpsAgent = new Agent({ rejectUnauthorized: false });
+const PID_FILE = '/tmp/ibkr-cpgateway.pid';
 
 export class GatewayLauncher {
-  private process: ChildProcess | null = null;
   private gatewayDir: string;
   private gatewayUrl: string;
 
   constructor(gatewayUrl: string) {
     this.gatewayUrl = gatewayUrl;
-    // Look for clientportal.gw relative to the project root
     this.gatewayDir = resolve(import.meta.dirname || __dirname, '../../clientportal.gw');
   }
 
-  /** Start the CP Gateway if not already running */
+  /** Extract port from gateway URL */
+  private get port(): number {
+    try {
+      return parseInt(new URL(this.gatewayUrl).port, 10) || 5001;
+    } catch {
+      return 5001;
+    }
+  }
+
+  /** Check if the port is already in use (faster than HTTP check) */
+  private async isPortInUse(): Promise<boolean> {
+    const net = await import('node:net');
+    return new Promise((resolve) => {
+      const sock = new net.Socket();
+      sock.setTimeout(1000);
+      sock.once('connect', () => { sock.destroy(); resolve(true); });
+      sock.once('error', () => { sock.destroy(); resolve(false); });
+      sock.once('timeout', () => { sock.destroy(); resolve(false); });
+      sock.connect(this.port, '127.0.0.1');
+    });
+  }
+
+  /** Start the CP Gateway as a detached process if not already running */
   async start(): Promise<boolean> {
-    // Check if gateway is already running
-    if (await this.isRunning()) {
-      process.stderr.write('[ibkr-mcp] Client Portal Gateway already running.\n');
+    // Quick port check first — faster than HTTP
+    if (await this.isPortInUse()) {
+      process.stderr.write(`[ibkr-mcp] Port ${this.port} already in use — Client Portal Gateway is running.\n`);
       return true;
     }
+
+    this.cleanStalePid();
 
     const runScript = resolve(this.gatewayDir, 'bin/run.sh');
     const confFile = resolve(this.gatewayDir, 'root/conf.yaml');
 
     if (!existsSync(runScript)) {
-      process.stderr.write(`[ibkr-mcp] Gateway not found at ${this.gatewayDir}. Skipping auto-launch.\n`);
+      process.stderr.write(`[ibkr-mcp] Gateway not found at ${this.gatewayDir}. Download from IB and place in clientportal.gw/.\n`);
+      process.stderr.write('[ibkr-mcp] Tools will still work if you start the gateway manually.\n');
       return false;
     }
 
-    process.stderr.write('[ibkr-mcp] Starting Client Portal Gateway...\n');
+    process.stderr.write('[ibkr-mcp] Starting Client Portal Gateway as detached process...\n');
 
-    this.process = spawn('sh', [runScript, confFile], {
+    // Spawn detached — survives MCP restarts
+    const child = spawn('sh', [runScript, confFile], {
       cwd: this.gatewayDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
+      stdio: 'ignore',
+      detached: true,
+      env: {
+        ...process.env,
+        // Ensure Java is on PATH (macOS Homebrew)
+        PATH: `/opt/homebrew/opt/openjdk/bin:/usr/local/opt/openjdk/bin:${process.env.PATH}`,
+        JAVA_HOME: process.env.JAVA_HOME || '/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home',
+      },
     });
 
-    this.process.stdout?.on('data', (data: Buffer) => {
-      process.stderr.write(`[gateway] ${data.toString().trim()}\n`);
-    });
+    // Save PID for cleanup / stale detection
+    if (child.pid) {
+      writeFileSync(PID_FILE, String(child.pid));
+    }
 
-    this.process.stderr?.on('data', (data: Buffer) => {
-      process.stderr.write(`[gateway] ${data.toString().trim()}\n`);
-    });
+    // Detach from parent — MCP can exit without killing gateway
+    child.unref();
 
-    this.process.on('exit', (code) => {
-      process.stderr.write(`[ibkr-mcp] Gateway process exited with code ${code}\n`);
-      this.process = null;
-    });
-
-    // Wait for gateway to become available
+    // Wait for gateway to accept connections
     const ready = await this.waitForReady(30000);
     if (ready) {
       process.stderr.write('[ibkr-mcp] Client Portal Gateway is ready.\n');
     } else {
-      process.stderr.write('[ibkr-mcp] Gateway did not become ready in time. Login at ' + this.gatewayUrl + '\n');
+      process.stderr.write(`[ibkr-mcp] Gateway started but not responding yet. Login at ${this.gatewayUrl}\n`);
     }
     return ready;
   }
 
-  private async isRunning(): Promise<boolean> {
+  /** Check if gateway is responding on its port */
+  async isRunning(): Promise<boolean> {
     try {
-      // @ts-ignore
-      const res = await fetch(`${this.gatewayUrl}/v1/api/tickle`, {
-        method: 'POST',
+      // NODE_TLS_REJECT_UNAUTHORIZED=0 is set by ib-client.ts
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      const res = await fetch(`${this.gatewayUrl}/v1/api/iserver/auth/status`, {
+        method: 'GET',
+        headers: { 'User-Agent': 'ibkr-mcp/3.0' },
         signal: AbortSignal.timeout(3000),
-        // @ts-ignore
-        dispatcher: httpsAgent,
       });
-      return res.ok || res.status === 401;
+      return true;
     } catch {
       return false;
     }
@@ -87,11 +112,26 @@ export class GatewayLauncher {
     return false;
   }
 
-  stop(): void {
-    if (this.process) {
-      process.stderr.write('[ibkr-mcp] Stopping Client Portal Gateway...\n');
-      this.process.kill('SIGTERM');
-      this.process = null;
+  private cleanStalePid(): void {
+    try {
+      if (existsSync(PID_FILE)) {
+        const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
+        try {
+          // Check if process is still alive (signal 0 = just check)
+          process.kill(pid, 0);
+          // Process exists — gateway might be starting up, don't kill it
+        } catch {
+          // Process is dead — clean up stale PID file
+          unlinkSync(PID_FILE);
+        }
+      }
+    } catch {
+      // Ignore errors
     }
+  }
+
+  /** Stop is a no-op for detached processes — gateway lives independently */
+  stop(): void {
+    // Intentionally empty — detached gateway survives MCP exit
   }
 }
