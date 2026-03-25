@@ -1,16 +1,14 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
-export function registerWatchlistTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerWatchlistTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_watchlists', {
     title: 'Get Watchlists',
     description: 'List saved watchlists. Requires brokerage session (auto-acquired, auto-releases after idle).',
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get('/iserver/watchlist');
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -27,7 +25,6 @@ export function registerWatchlistTools(server: McpServer, client: IBClient, sess
     annotations: { readOnlyHint: true },
   }, async ({ id }) => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get('/iserver/watchlist', { id });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {

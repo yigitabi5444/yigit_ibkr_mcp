@@ -1,16 +1,14 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
-export function registerOrdersTradesTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerOrdersTradesTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_live_orders', {
     title: 'Get Live Orders',
     description: 'List all currently live/working orders. Requires brokerage session (auto-acquired, auto-releases after idle).',
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get('/iserver/account/orders');
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -27,7 +25,6 @@ export function registerOrdersTradesTools(server: McpServer, client: IBClient, s
     annotations: { readOnlyHint: true },
   }, async ({ orderId }) => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get(`/iserver/account/order/status/${orderId}`);
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -41,7 +38,6 @@ export function registerOrdersTradesTools(server: McpServer, client: IBClient, s
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get('/iserver/account/trades');
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {

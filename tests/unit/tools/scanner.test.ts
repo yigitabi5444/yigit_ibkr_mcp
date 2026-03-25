@@ -15,7 +15,7 @@ beforeEach(async () => {
 
 describe('Scanner Tools', () => {
   it('get_scanner_params returns params and caches on second call', async () => {
-    const { client, sessionManager } = createMockClient();
+    const { client } = createMockClient();
     const scannerParams = {
       instrument_list: [{ name: 'US Stocks', type: 'STK' }],
       scan_type_list: [{ name: 'Top % Gainers', code: 'TOP_PERC_GAIN' }],
@@ -23,7 +23,7 @@ describe('Scanner Tools', () => {
     (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(scannerParams);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerScannerTools(server, client, sessionManager);
+    registerScannerTools(server, client);
 
     const handler = getToolHandler(server, 'get_scanner_params');
 
@@ -42,7 +42,7 @@ describe('Scanner Tools', () => {
   });
 
   it('run_scanner posts scanner config and returns results', async () => {
-    const { client, sessionManager } = createMockClient();
+    const { client } = createMockClient();
     const scanResults = [
       { conid: 265598, symbol: 'AAPL', changePercent: 5.2 },
       { conid: 272093, symbol: 'MSFT', changePercent: 3.8 },
@@ -50,7 +50,7 @@ describe('Scanner Tools', () => {
     (client.post as ReturnType<typeof vi.fn>).mockResolvedValue(scanResults);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerScannerTools(server, client, sessionManager);
+    registerScannerTools(server, client);
 
     const handler = getToolHandler(server, 'run_scanner');
     const result = await handler({
@@ -62,7 +62,6 @@ describe('Scanner Tools', () => {
 
     expect(data).toHaveLength(2);
     expect(data[0].symbol).toBe('AAPL');
-    expect(sessionManager.ensureBrokerageSession).toHaveBeenCalled();
     expect(client.post).toHaveBeenCalledWith('/iserver/scanner/run', {
       instrument: 'STK',
       location: 'STK.US.MAJOR',
@@ -71,11 +70,11 @@ describe('Scanner Tools', () => {
   });
 
   it('run_scanner passes optional filters', async () => {
-    const { client, sessionManager } = createMockClient();
+    const { client } = createMockClient();
     (client.post as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerScannerTools(server, client, sessionManager);
+    registerScannerTools(server, client);
 
     const handler = getToolHandler(server, 'run_scanner');
     const filters = [{ code: 'priceAbove', value: 10 }];

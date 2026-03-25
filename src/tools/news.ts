@@ -1,16 +1,14 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
-export function registerNewsTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerNewsTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_news_sources', {
     title: 'Get News Sources',
     description: 'List available news sources/providers from IB.',
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get('/iserver/news/sources');
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -24,7 +22,6 @@ export function registerNewsTools(server: McpServer, client: IBClient, sessionMa
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get<{ provider?: string; source?: string; title?: string; content?: string }>('/iserver/news/briefing');
 
       // Strip HTML tags for cleaner LLM consumption

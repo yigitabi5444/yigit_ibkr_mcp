@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-  An MCP server that gives AI assistants real-time access to your Interactive Brokers account via the Client Portal Web API — with smart session management that doesn't kick you off your phone.
+  An MCP server that gives AI assistants real-time access to your Interactive Brokers account via the Client Portal Web API.
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#tools">26 Tools</a> &bull;
-  <a href="#smart-session-management">Smart Sessions</a> &bull;
+  <a href="#tools">Tools</a> &bull;
+  <a href="#ibeam-setup">IBeam Setup</a> &bull;
   <a href="#configuration">Config</a>
 </p>
 
@@ -19,7 +19,9 @@
 
 ## What is this?
 
-**ibkr-mcp** connects Claude (or any MCP-compatible AI) directly to your Interactive Brokers account through the **Client Portal Web API**. It features a smart two-tier session design that lets you query your portfolio without disrupting your phone or TWS sessions.
+**ibkr-mcp** connects Claude (or any MCP-compatible AI) directly to your Interactive Brokers account through the **Client Portal Web API**. It's a thin, stateless wrapper — no session management, no gateway lifecycle, no tickling. Just tools that call the API.
+
+Gateway authentication and session management is handled externally by [IBeam](https://github.com/Voyz/ibeam), which runs in Docker and handles login automation + 2FA.
 
 ```
 You: "What's my portfolio P&L today?"
@@ -29,37 +31,12 @@ Claude: Your account U1234567 is up $1,247.30 today.
         Net liquidation: $284,521.00
 ```
 
-```
-You: "Get me the AAPL option chain for next month"
-
-Claude: AAPL option chain (nearest expiration):
-        Call strikes: 170, 175, 180, 185, 190, 195, 200
-        Put strikes:  170, 175, 180, 185, 190, 195, 200
-        42 option contracts found
-```
-
-## Smart Session Management
-
-IB only allows one "brokerage session" per username. This MCP handles it intelligently:
-
-| Tier | Endpoints | Conflicts with phone? | Tools |
-|------|-----------|----------------------|-------|
-| **Read-only** | `/portfolio/*`, `/pa/*`, `/trsrv/*`, `/iserver/secdef/*` | **Never** | Positions, account summary, allocation, contract search, option chains |
-| **Brokerage** | `/iserver/marketdata/*`, `/iserver/account/orders`, etc. | **Temporarily** | Market data, P&L, orders, trades, scanner |
-
-**How it works:**
-1. MCP starts in **read-only mode** — portfolio, positions, contracts all work without touching your phone session
-2. When you ask for market data or orders, it **auto-acquires** the brokerage session
-3. After **2 minutes of idle**, it **auto-releases** the session — your phone can reconnect automatically
-4. No manual intervention needed
-
 ## Features
 
-- **26 read-only tools** — portfolio, deep market data, options, orders, scanner, watchlists, FX
-- **Zero dependencies** beyond `@modelcontextprotocol/sdk` and `zod` — uses Node.js native `fetch()`
-- **Auto-starts the Client Portal Gateway** on launch (just drop `clientportal.gw/` in the repo)
-- **Self-signed cert handling** — works out of the box with IB's default SSL
-- **Real error messages** — surfaces actual errors (ECONNRESET, ECONNREFUSED) not generic failures
+- **26 read-only tools** — portfolio, market data, options, orders, scanner, watchlists, news, FX
+- **Stateless** — no session management, no tickling, no gateway lifecycle. IBeam handles all of that.
+- **Human-readable market data** — snapshot fields mapped to names like `lastPrice`, `week52High`, `sector`
+- **Zero dependencies** beyond `@modelcontextprotocol/sdk` and `zod`
 - **Rate limiting** — per-endpoint sliding window that waits instead of erroring
 - **Snapshot warmup** — auto-retries on IB's first-call empty response
 
@@ -68,21 +45,24 @@ IB only allows one "brokerage session" per username. This MCP handles it intelli
 ### Prerequisites
 
 - **Node.js 18+**
-- **Java Runtime** (required by the Client Portal Gateway)
-  ```bash
-  # macOS
-  brew install openjdk
-  sudo ln -sfn $(brew --prefix openjdk)/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk.jdk
+- **Docker** (for IBeam)
+- **IB account** with Client Portal API access
 
-  # Ubuntu/Debian
-  sudo apt install default-jre
+### 1. Start IBeam (Gateway + Auth)
 
-  # Verify
-  java -version
-  ```
-- **Client Portal Gateway** — the IB-provided REST gateway (included in this repo at `clientportal.gw/`, gitignored)
+IBeam handles the Client Portal Gateway process, browser login automation, session keepalive, and 2FA. See [IBeam Setup](#ibeam-setup) below.
 
-### Install & Build
+```bash
+docker run -d \
+  --name ibeam \
+  -p 5000:5000 \
+  -e IBEAM_ACCOUNT=your_ib_username \
+  -e IBEAM_PASSWORD=your_ib_password \
+  -e IBEAM_GATEWAY_BASE_URL=https://localhost:5000 \
+  voyz/ibeam
+```
+
+### 2. Install & Build MCP
 
 ```bash
 git clone https://github.com/yigitabi5444/yigit_ibkr_mcp.git
@@ -91,14 +71,7 @@ npm install
 npm run build
 ```
 
-### Setup Client Portal Gateway
-
-1. Download the [Client Portal Gateway](https://download2.interactivebrokers.com/portal/clientportal.gw.zip)
-2. Extract to `clientportal.gw/` inside this repo (it's gitignored)
-3. The MCP will auto-start it on launch
-4. First time: open `https://localhost:5001/` in your browser and login
-
-### Add to Claude Desktop
+### 3. Add to Claude Desktop
 
 ```json
 {
@@ -107,104 +80,154 @@ npm run build
       "command": "node",
       "args": ["/path/to/yigit_ibkr_mcp/dist/index.js"],
       "env": {
-        "IBKR_GATEWAY_URL": "https://localhost:5001"
+        "IBKR_GATEWAY_URL": "https://localhost:5000"
       }
     }
   }
 }
 ```
 
+## IBeam Setup
+
+[IBeam](https://github.com/Voyz/ibeam) is the recommended way to run the IB Client Portal Gateway. It handles:
+
+- Starting the gateway Java process
+- Automated browser login (headless Chrome + Selenium)
+- 2FA handling (push notification, SMS, or custom handler)
+- Session keepalive
+- Automatic re-authentication on session expiry
+
+### Basic Docker Setup
+
+```bash
+docker run -d \
+  --name ibeam \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -e IBEAM_ACCOUNT=your_username \
+  -e IBEAM_PASSWORD=your_password \
+  voyz/ibeam
+```
+
+### With 2FA (Push Notification)
+
+```bash
+docker run -d \
+  --name ibeam \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -e IBEAM_ACCOUNT=your_username \
+  -e IBEAM_PASSWORD=your_password \
+  -e IBEAM_TWO_FA_HANDLER=PUSH \
+  voyz/ibeam
+```
+
+### Docker Compose
+
+```yaml
+services:
+  ibeam:
+    image: voyz/ibeam
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      IBEAM_ACCOUNT: ${IB_USERNAME}
+      IBEAM_PASSWORD: ${IB_PASSWORD}
+      IBEAM_TWO_FA_HANDLER: PUSH
+```
+
+See the [IBeam docs](https://github.com/Voyz/ibeam) for full configuration including custom 2FA handlers, health checks, and troubleshooting.
+
 ## Tools
 
-### Read-Only Tier (never conflicts with phone)
-
+### Account & Portfolio
 | Tool | Description |
 |------|-------------|
 | `get_accounts` | List all brokerage accounts |
-| `get_account_summary` | Balances, margin, buying power, net liquidation, cash by currency |
+| `get_account_summary` | Curated: NLV, cash, buying power, margin, positions value, cash by currency |
+| `get_account_summary_full` | Full 70+ field raw summary |
 | `get_account_allocation` | Asset class breakdown (stocks, options, futures, cash %) |
 | `get_positions` | All positions with P&L. Auto-paginates. Options include strike/right/expiry |
 | `get_position_by_conid` | Single position by contract ID |
 | `get_performance` | Historical NAV and time-weighted returns |
 | `get_transaction_history` | Transaction log with filters |
+
+### Market Data
+| Tool | Description |
+|------|-------------|
+| `get_market_snapshot` | Real-time quote with readable names (lastPrice, bid, ask, sector, week52High, etc.) |
+| `get_price_history` | Historical OHLCV bars (1min to monthly, up to 5 years) |
+
+### Contracts
+| Tool | Description |
+|------|-------------|
 | `search_contracts` | Search by symbol or company name |
-| `get_contract_details` | Full contract specs (trading hours, tick size, exchanges) |
+| `get_contract_details` | Curated contract specs (trading hours, tick size, exchanges) |
 | `get_stock_contracts` | Stock contracts across exchanges |
 | `get_futures_contracts` | Non-expired futures by underlying |
+
+### Options
+| Tool | Description |
+|------|-------------|
 | `get_option_chain` | Full option chain (composite: strikes + conids in one call) |
 | `get_option_strikes` | Strike prices for a specific expiration |
 
-### Brokerage Tier (auto-acquires, auto-releases after 2min idle)
-
+### Orders & Trades
 | Tool | Description |
 |------|-------------|
-| `get_market_snapshot` | Quote + P/E, EPS, div yield, market cap, 52wk, IV — 27 fields |
-| `get_price_history` | Historical OHLCV bars (1min to monthly, up to 5 years) |
-| `get_pnl` | Account-level daily P&L, unrealized P&L, net liquidity |
 | `get_live_orders` | All currently working orders |
 | `get_order_status` | Single order status |
 | `get_trades` | Execution history (7 days) |
-| `get_scanner_params` | Available scanner types and filters (cached 15min) |
-| `run_scanner` | Market scanner (top gainers, most active, etc.) |
-| `get_watchlists` | Saved watchlists |
-| `get_watchlist` | Contracts in a watchlist |
-| `get_exchange_rate` | FX rates |
 
-### Session Management
-
+### Scanner
 | Tool | Description |
 |------|-------------|
-| `get_auth_status` | Check gateway authentication state |
-| `reauthenticate` | Trigger re-authentication |
-| `ping_session` | Manual keepalive |
+| `get_scanner_params` | Available scanner types and filters (cached 15min) |
+| `run_scanner` | Market scanner (top gainers, most active, etc.) |
+
+### Other
+| Tool | Description |
+|------|-------------|
+| `get_watchlists` / `get_watchlist` | Saved watchlists |
+| `get_exchange_rate` | FX rates |
+| `get_news_sources` | Available news providers |
+| `get_news_briefing` | Market briefing from Briefing.com |
+| `get_auth_status` / `reauthenticate` / `ping_session` | Session diagnostics |
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `IBKR_GATEWAY_URL` | `https://localhost:5001` | Client Portal Gateway URL |
+| `IBKR_GATEWAY_URL` | `https://localhost:5001` | Client Portal Gateway URL (IBeam default: 5000) |
 | `IBKR_ACCOUNT_ID` | *(auto-detected)* | Default account ID |
 | `IBKR_TIMEOUT_MS` | `15000` | Request timeout in ms |
-| `IBKR_BROKERAGE_TIMEOUT_MS` | `120000` (2min) | Idle time before releasing brokerage session |
 
 ## Architecture
 
 ```
-┌─────────────────┐     stdio      ┌──────────────────────────────────┐
-│  Claude Desktop  │ ◄────────────► │           ibkr-mcp                │
-│  (MCP Client)    │                │                                  │
-└─────────────────┘                │  IBClient ──────► CP Gateway :5000
-                                    │    │                    │
-                                    │  RateLimiter            │ HTTPS
-                                    │    │                    │ (self-signed)
-                                    │  SessionManager         │
-                                    │    │                    ▼
-                                    │    ├─ Read-only:     /portfolio/*
-                                    │    │  (no tickle)    /pa/*, /trsrv/*
-                                    │    │
-                                    │    └─ Brokerage:     /iserver/*
-                                    │       (tickle 55s)   (auto-release
-                                    │                       after 2min idle)
-                                    │                                  │
-                                    │  GatewayLauncher                 │
-                                    │    (auto-starts clientportal.gw) │
-                                    │                                  │
-                                    │  26 Read-Only MCP Tools          │
-                                    └──────────────────────────────────┘
+┌─────────────────┐     stdio      ┌────────────────┐     HTTPS      ┌─────────────┐
+│  Claude Desktop  │ ◄────────────► │    ibkr-mcp    │ ────────────► │   IBeam     │
+│  (MCP Client)    │                │  (stateless)   │               │  (Docker)   │
+└─────────────────┘                │                │               │             │
+                                    │  IBClient      │               │  CP Gateway │
+                                    │  RateLimiter   │               │  Selenium   │
+                                    │  26 Tools      │               │  Keepalive  │
+                                    └────────────────┘               └─────────────┘
 ```
+
+The MCP is intentionally thin — it just makes HTTP calls. IBeam owns the gateway process, authentication, session keepalive, and 2FA.
 
 ## Development
 
 ```bash
 npm run dev          # Run with tsx (hot reload)
-npm test             # Unit tests (32 tests, mocked, no gateway needed)
-npm run test:integration  # Integration tests (requires live CP Gateway)
+npm test             # Unit tests (27 tests, mocked, no gateway needed)
+npm run test:integration  # Integration tests (requires live gateway)
 ```
 
-### Running Integration Tests
-
 ```bash
-IBKR_GATEWAY_URL=https://localhost:5001 npm run test:integration
+IBKR_GATEWAY_URL=https://localhost:5000 npm run test:integration
 ```
 
 ## License

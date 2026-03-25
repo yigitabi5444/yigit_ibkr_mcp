@@ -1,16 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
-export function registerSessionTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerSessionTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_auth_status', {
     title: 'Get Auth Status',
     description: 'Check if the Client Portal Gateway is authenticated. Returns auth state, competing session flag, and connection status.',
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      const status = await sessionManager.checkAuth();
-      return { content: [{ type: 'text', text: JSON.stringify(status, null, 2) }] };
+      const data = await client.get('/iserver/auth/status');
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
@@ -31,7 +30,7 @@ export function registerSessionTools(server: McpServer, client: IBClient, sessio
 
   server.registerTool('ping_session', {
     title: 'Ping Session',
-    description: 'Send a tickle/keepalive to the Client Portal Gateway. Returns session token and competing flag.',
+    description: 'Send a tickle/keepalive to the Client Portal Gateway.',
     annotations: { readOnlyHint: true },
   }, async () => {
     try {

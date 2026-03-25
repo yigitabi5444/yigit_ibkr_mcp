@@ -6,14 +6,14 @@ import { registerMarketDataTools } from '../../../src/tools/market-data.js';
 
 describe('Market Data Tools', () => {
   it('get_market_snapshot returns field data and passes conids', async () => {
-    const { client, sessionManager } = createMockClient();
+    const { client } = createMockClient();
     const snapshot = [
       { conid: 265598, '31': '175.50', '84': '175.40', '85': '175.60', '86': '175.80' },
     ];
     (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(snapshot);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, client, sessionManager);
+    registerMarketDataTools(server, client);
 
     const handler = getToolHandler(server, 'get_market_snapshot');
     const result = await handler({ conids: [265598] });
@@ -29,7 +29,7 @@ describe('Market Data Tools', () => {
   });
 
   it('get_market_snapshot retries on warmup (empty first response)', async () => {
-    const { client, sessionManager } = createMockClient();
+    const { client } = createMockClient();
     const emptySnapshot = [{ conid: 265598, conidEx: '265598', server_id: 'abc' }];
     const fullSnapshot = [{ conid: 265598, '31': '175.50', '84': '175.40' }];
 
@@ -38,7 +38,7 @@ describe('Market Data Tools', () => {
       .mockResolvedValueOnce(fullSnapshot);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, client, sessionManager);
+    registerMarketDataTools(server, client);
 
     const handler = getToolHandler(server, 'get_market_snapshot');
     const result = await handler({ conids: [265598] });
@@ -49,7 +49,7 @@ describe('Market Data Tools', () => {
   });
 
   it('get_price_history returns OHLCV bars', async () => {
-    const { client, sessionManager } = createMockClient();
+    const { client } = createMockClient();
     const history = {
       symbol: 'AAPL',
       data: [
@@ -60,7 +60,7 @@ describe('Market Data Tools', () => {
     (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(history);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
-    registerMarketDataTools(server, client, sessionManager);
+    registerMarketDataTools(server, client);
 
     const handler = getToolHandler(server, 'get_price_history');
     const result = await handler({ conid: 265598, period: '1m', bar: '1d' });
@@ -69,6 +69,5 @@ describe('Market Data Tools', () => {
     expect(data.symbol).toBe('AAPL');
     expect(data.data).toHaveLength(2);
     expect(data.data[0].o).toBe(174.0);
-    expect(sessionManager.ensureBrokerageSession).toHaveBeenCalled();
   });
 });

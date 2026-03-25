@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { loadConfig } from '../../src/config.js';
 import { IBClient } from '../../src/client/ib-client.js';
-import { SessionManager } from '../../src/client/session-manager.js';
 
 const GATEWAY_URL = process.env.IBKR_GATEWAY_URL;
 
@@ -10,16 +9,14 @@ const describeIf = GATEWAY_URL ? describe : describe.skip;
 
 describeIf('Live Client Portal Gateway Integration', () => {
   let client: IBClient;
-  let sessionManager: SessionManager;
   let accountId: string;
 
   beforeAll(async () => {
     const config = loadConfig();
     client = new IBClient(config);
-    sessionManager = new SessionManager(client, config.tickleIntervalMs, config.brokerageTimeoutMs);
 
     // Verify gateway is authenticated
-    const status = await sessionManager.checkAuth();
+    const status = await client.get<{ authenticated: boolean; connected: boolean }>('/iserver/auth/status');
     if (!status.authenticated) {
       throw new Error('Client Portal Gateway is not authenticated. Login at ' + config.gatewayUrl);
     }
@@ -27,12 +24,8 @@ describeIf('Live Client Portal Gateway Integration', () => {
     accountId = await client.getDefaultAccountId();
   }, 30000);
 
-  afterAll(() => {
-    sessionManager?.stop();
-  });
-
   it('checks auth status', async () => {
-    const status = await sessionManager.checkAuth();
+    const status = await client.get<{ authenticated: boolean; connected: boolean }>('/iserver/auth/status');
     expect(status.authenticated).toBe(true);
     expect(status.connected).toBe(true);
   });
@@ -91,9 +84,7 @@ describeIf('Live Client Portal Gateway Integration', () => {
     expect(data).toBeDefined();
   });
 
-  // Brokerage session tests (these will grab the session temporarily)
   it('gets market data snapshot', async () => {
-    await sessionManager.ensureBrokerageSession();
     const results = await client.post<Array<{ conid: number }>>('/iserver/secdef/search', { symbol: 'AAPL' });
     const conid = results[0].conid;
 
@@ -105,25 +96,21 @@ describeIf('Live Client Portal Gateway Integration', () => {
   }, 15000);
 
   it('gets P&L', async () => {
-    await sessionManager.ensureBrokerageSession();
     const data = await client.get('/iserver/account/pnl/partitioned');
     expect(data).toBeDefined();
   });
 
   it('gets live orders', async () => {
-    await sessionManager.ensureBrokerageSession();
     const data = await client.get('/iserver/account/orders');
     expect(data).toBeDefined();
   });
 
   it('gets trades', async () => {
-    await sessionManager.ensureBrokerageSession();
     const data = await client.get('/iserver/account/trades');
     expect(data).toBeDefined();
   });
 
   it('gets exchange rate', async () => {
-    await sessionManager.ensureBrokerageSession();
     const data = await client.get('/iserver/exchangerate', { source: 'USD', target: 'EUR' });
     expect(data).toBeDefined();
   });

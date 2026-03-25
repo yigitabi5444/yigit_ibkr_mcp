@@ -1,7 +1,7 @@
 {
   "name": "ibkr-mcp",
-  "version": "3.0.0",
-  "description": "MCP server for Interactive Brokers Client Portal Web API with smart session management",
+  "version": "4.0.0",
+  "description": "MCP server for Interactive Brokers Client Portal Web API",
   "type": "module",
   "bin": {
     "ibkr-mcp": "./dist/index.js"

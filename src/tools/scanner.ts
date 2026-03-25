@@ -1,12 +1,11 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
 let cachedScannerParams: { data: unknown; timestamp: number } | null = null;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
-export function registerScannerTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerScannerTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_scanner_params', {
     title: 'Get Scanner Parameters',
     description: 'Get available market scanner parameters. Cached for 15 minutes. Requires brokerage session (auto-acquired, auto-releases after idle).',
@@ -16,7 +15,6 @@ export function registerScannerTools(server: McpServer, client: IBClient, sessio
       if (cachedScannerParams && Date.now() - cachedScannerParams.timestamp < CACHE_TTL_MS) {
         return { content: [{ type: 'text', text: JSON.stringify(cachedScannerParams.data, null, 2) }] };
       }
-      await sessionManager.ensureBrokerageSession();
       const data = await client.get('/iserver/scanner/params');
       cachedScannerParams = { data, timestamp: Date.now() };
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -40,7 +38,6 @@ export function registerScannerTools(server: McpServer, client: IBClient, sessio
     annotations: { readOnlyHint: true },
   }, async ({ instrument, location, type, filters }) => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const body: Record<string, unknown> = { instrument, location, type };
       if (filters) body.filter = filters;
       const data = await client.post('/iserver/scanner/run', body);

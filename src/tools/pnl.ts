@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
-export function registerPnlTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerPnlTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_pnl', {
     title: 'Get P&L',
     description: 'Get account-level profit and loss data: daily P&L (dpl), unrealized P&L (upl), net liquidity (nl), and excess liquidity (el). Requires brokerage session (auto-acquired, auto-releases after idle).',
@@ -13,7 +12,6 @@ export function registerPnlTools(server: McpServer, client: IBClient, sessionMan
     annotations: { readOnlyHint: true },
   }, async ({ accountId }) => {
     try {
-      await sessionManager.ensureBrokerageSession();
       if (accountId) {
         await client.post('/iserver/account', { acctId: accountId });
       }

@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IBClient } from '../client/ib-client.js';
-import { SessionManager } from '../client/session-manager.js';
 
 // Default fields: price + volume + fundamentals (when available) + position P&L
 const DEFAULT_FIELDS = [
@@ -69,7 +68,7 @@ function humanizeSnapshot(raw: Record<string, unknown>): Record<string, unknown>
   return result;
 }
 
-export function registerMarketDataTools(server: McpServer, client: IBClient, sessionManager: SessionManager): void {
+export function registerMarketDataTools(server: McpServer, client: IBClient): void {
   server.registerTool('get_market_snapshot', {
     title: 'Get Market Snapshot',
     description: 'Get real-time market data snapshot with human-readable field names. Returns: symbol, lastPrice, bid, ask, volume, open, high, low, close, change, changePercent, week52High, week52Low, sector, industry, avgVolume, revenueGrowthPct, epsGrowthPct, changeFrom52wkHighPct, price bands (10d/30d). Also returns peRatio, eps, dividendYieldPct, marketCap, impliedVolatility when your IB market data subscription includes them. Auto-retries on first-call warmup.',
@@ -80,7 +79,6 @@ export function registerMarketDataTools(server: McpServer, client: IBClient, ses
     annotations: { readOnlyHint: true },
   }, async ({ conids, fields }) => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const fieldList = fields || DEFAULT_FIELDS;
       const params = {
         conids: conids.join(','),
@@ -120,7 +118,6 @@ export function registerMarketDataTools(server: McpServer, client: IBClient, ses
     annotations: { readOnlyHint: true },
   }, async ({ conid, period, bar, outsideRth, exchange }) => {
     try {
-      await sessionManager.ensureBrokerageSession();
       const params: Record<string, string | number | boolean | undefined> = { conid, period, bar };
       if (outsideRth !== undefined) params.outsideRth = outsideRth;
       if (exchange) params.exchange = exchange;
