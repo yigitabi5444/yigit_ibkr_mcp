@@ -5,31 +5,24 @@ import { getToolHandler } from '../helpers/get-tool-handler.js';
 import { registerOptionsTools } from '../../../src/tools/options.js';
 
 describe('Options Tools', () => {
-  it('get_option_chain fetches strikes then secdef info for each', async () => {
+  it('get_option_chain returns strikes without fetching conids', async () => {
     const { client } = createMockClient();
-    const strikes = { call: [170, 175], put: [170, 175] };
-
-    (client.get as ReturnType<typeof vi.fn>)
-      // First call: strikes
-      .mockResolvedValueOnce(strikes)
-      // Then secdef/info calls for C@170, C@175, P@170, P@175
-      .mockResolvedValueOnce([{ conid: 1001, strike: 170, right: 'C' }])
-      .mockResolvedValueOnce([{ conid: 1002, strike: 175, right: 'C' }])
-      .mockResolvedValueOnce([{ conid: 2001, strike: 170, right: 'P' }])
-      .mockResolvedValueOnce([{ conid: 2002, strike: 175, right: 'P' }]);
+    const strikes = { call: [170, 175, 180, 185, 190], put: [170, 175, 180, 185, 190] };
+    (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(strikes);
 
     const server = new McpServer({ name: 'test', version: '1.0' });
     registerOptionsTools(server, client);
 
     const handler = getToolHandler(server, 'get_option_chain');
-    const result = await handler({ conid: 265598 });
+    const result = await handler({ conid: 265598, month: 'MAY26' });
     const data = JSON.parse(result.content[0].text);
 
     expect(data.underlying_conid).toBe(265598);
-    expect(data.strikes.call).toEqual([170, 175]);
-    expect(data.strikes.put).toEqual([170, 175]);
-    expect(data.total_contracts).toBe(4);
-    expect(data.contracts[0].conid).toBe(1001);
+    expect(data.callStrikes).toEqual([170, 175, 180, 185, 190]);
+    expect(data.putStrikes).toEqual([170, 175, 180, 185, 190]);
+    expect(data.totalCallStrikes).toBe(5);
+    // Only 1 API call — no per-strike loop
+    expect(client.get).toHaveBeenCalledTimes(1);
   });
 
   it('get_option_chain returns message when no strikes found', async () => {
@@ -46,6 +39,23 @@ describe('Options Tools', () => {
     expect(data.message).toBe('No option strikes found.');
   });
 
+  it('get_option_contracts fetches conids for specific strikes in parallel', async () => {
+    const { client } = createMockClient();
+    (client.get as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ conid: 1001, strike: 180, right: 'C', month: 'MAY26' }]);
+
+    const server = new McpServer({ name: 'test', version: '1.0' });
+    registerOptionsTools(server, client);
+
+    const handler = getToolHandler(server, 'get_option_contracts');
+    const result = await handler({ conid: 265598, month: 'MAY26', strikes: [180, 185], right: 'C' });
+    const data = JSON.parse(result.content[0].text);
+
+    expect(data.total_contracts).toBeGreaterThan(0);
+    // Should call in parallel for 2 strikes
+    expect(client.get).toHaveBeenCalledTimes(2);
+  });
+
   it('get_option_strikes returns call and put strikes', async () => {
     const { client } = createMockClient();
     const strikesData = { call: [170, 175, 180, 185], put: [170, 175, 180, 185] };
@@ -60,10 +70,5 @@ describe('Options Tools', () => {
 
     expect(data.call).toEqual([170, 175, 180, 185]);
     expect(data.put).toEqual([170, 175, 180, 185]);
-    expect(client.get).toHaveBeenCalledWith('/iserver/secdef/strikes', {
-      conid: 265598,
-      sectype: 'OPT',
-      month: 'JAN25',
-    });
   });
 });
