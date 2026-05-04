@@ -12,6 +12,7 @@ import { registerOrdersTradesTools } from './orders-trades.js';
 import { registerWatchlistTools } from './watchlists.js';
 import { registerCurrencyTools } from './currency.js';
 import { registerNewsTools } from './news.js';
+import { registerFundamentalsTools } from './fundamentals.js';
 
 export function registerAllTools(server: McpServer, client: IBClient): void {
   registerSessionTools(server, client);
@@ -26,4 +27,5 @@ export function registerAllTools(server: McpServer, client: IBClient): void {
   registerWatchlistTools(server, client);
   registerCurrencyTools(server, client);
   registerNewsTools(server, client);
+  registerFundamentalsTools(server, client);
 }
